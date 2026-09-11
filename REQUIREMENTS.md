@@ -117,7 +117,7 @@ ShellQuest 是一个兼具学习、练习与速查能力的 Linux 命令训练 W
 | 层级 | 技术 |
 | --- | --- |
 | 前端 | Vue 3 + TypeScript |
-| 后端 | Python |
+| 后端 | Python + FastAPI |
 | 数据库 | MySQL |
 | 缓存/排行榜/会话等 | Redis |
 | 部署 | Docker 容器化部署 |
