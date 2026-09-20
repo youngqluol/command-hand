@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 
 import secrets
@@ -12,6 +13,16 @@ from .models import Quest, QuestCompletion, User, UserSession
 from .schemas import AuthResponse, CompletionResponse, QuestSummary, RegisterRequest, UserSummary
 from .security import hash_password, verify_password
 from .seed_data import QUEST_SEEDS
+
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://localhost:8080",
+    ).split(",")
+    if origin.strip()
+]
+
 
 def get_db():
     db = SessionLocal()
@@ -73,7 +84,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="ShellQuest API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:8080"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

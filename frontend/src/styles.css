@@ -6,6 +6,12 @@ body { margin: 0; min-width: 320px; background: radial-gradient(circle at 80% -1
 button, input { font: inherit; }
 button { cursor: pointer; }
 .app-shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 48px; }
+.api-alert { display: flex; gap: 12px; align-items: flex-start; margin: 16px 0 0; padding: 12px 14px; border: 1px solid #7a472b; border-radius: 8px; background: linear-gradient(180deg, #2a1810, #1c0f08); color: #f1cba6; }
+.api-alert .alert-mark { font-size: 20px; line-height: 1; color: #f2a15b; }
+.api-alert strong { display: block; font-size: 14px; color: #f7cf9a; }
+.api-alert small { display: block; margin-top: 4px; font-size: 12px; color: #c6a98b; line-height: 1.55; }
+.api-alert small code { color: #f3c48a; font-family: 'DM Mono', monospace; font-size: 11px; background: #3a2414; padding: 1px 5px; border-radius: 3px; }
+.api-alert .alert-close { margin-left: auto; border: 0; background: transparent; color: #d7a473; font-size: 20px; padding: 0 4px; line-height: 1; }
 .topbar { height: 76px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #1e2a31; }
 .brand, nav button, .profile { border: 0; background: transparent; color: #a8b8c0; }
 .brand { display: flex; align-items: center; gap: 10px; color: #eff9f2; font-family: 'DM Mono', monospace; font-weight: 500; font-size: 18px; }

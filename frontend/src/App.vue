@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') || ''
+
 type Quest = {
   id: number
   zone: string
@@ -26,6 +28,7 @@ const authMode = ref<'login' | 'register'>('login')
 const credentials = ref({ username: '', password: '' })
 const authError = ref('')
 const completionMessage = ref('')
+const apiUnavailable = ref(false)
 
 const fallbackQuests: Quest[] = [
   { id: 1, zone: '文件工坊', title: '初入服务器', command: 'whoami · pwd', description: '确认当前身份、目录和系统环境。', status: 'done' },
@@ -39,12 +42,16 @@ const activeQuest = computed(() => quests.value.find((quest) => quest.status ===
 const result = ref<'idle' | 'success' | 'error'>('idle')
 const terminalInput = ref('find /srv/app -name "*.env"')
 
+function apiUrl(path: string): string {
+  return `${API_BASE}${path.startsWith('/') ? path : '/' + path}`
+}
+
 async function runCommand() {
   result.value = terminalInput.value.trim().includes('find') && terminalInput.value.includes('.env') ? 'success' : 'error'
   completionMessage.value = ''
   if (result.value !== 'success' || !authUser.value || !activeQuest.value) return
   try {
-    const response = await fetch(`/api/v1/quests/${activeQuest.value.id}/complete`, {
+    const response = await fetch(apiUrl(`/api/v1/quests/${activeQuest.value.id}/complete`), {
       method: 'POST',
       headers: { 'X-Session-Token': sessionToken.value },
     })
@@ -52,8 +59,9 @@ async function runCommand() {
     const payload: { already_completed: boolean; xp_awarded: number; user: UserSummary } = await response.json()
     authUser.value = payload.user
     completionMessage.value = payload.already_completed ? '该任务已完成，进度已保留。' : `任务完成 · +${payload.xp_awarded} XP`
-  } catch {
-    completionMessage.value = '已在本地完成演练；暂时无法保存进度。'
+  } catch (err) {
+    console.error('[ShellQuest] 保存进度失败:', err)
+    completionMessage.value = '已在本地完成演练；暂时无法保存进度，请检查后端服务是否可用。'
   }
 }
 
@@ -65,7 +73,7 @@ function selectTab(tab: 'home' | 'quests' | 'search') {
 async function submitAuth() {
   authError.value = ''
   try {
-    const response = await fetch(`/api/v1/auth/${authMode.value}`, {
+    const response = await fetch(apiUrl(`/api/v1/auth/${authMode.value}`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(credentials.value),
@@ -80,14 +88,17 @@ async function submitAuth() {
     authUser.value = payload.user
     showAuth.value = false
     credentials.value = { username: '', password: '' }
-  } catch {
-    authError.value = '无法连接到本地 API。'
+    apiUnavailable.value = false
+  } catch (err) {
+    console.error('[ShellQuest] 认证请求失败:', err)
+    apiUnavailable.value = true
+    authError.value = `无法连接到 API 服务 (${API_BASE || '/api'})。请检查后端是否启动、网络是否可达。`
   }
 }
 
 onMounted(async () => {
   try {
-    const response = await fetch('/api/v1/quests')
+    const response = await fetch(apiUrl('/api/v1/quests'))
     if (!response.ok) return
     const apiQuests: Array<Omit<Quest, 'command' | 'status'> & { command_hint: string }> = await response.json()
     quests.value = apiQuests.map((quest) => ({
@@ -95,16 +106,17 @@ onMounted(async () => {
       command: quest.command_hint,
       status: quest.id === 1 ? 'done' : quest.id === 2 ? 'current' : 'locked',
     }))
-  } catch {
-    // 本地 API 未启动时保留原型数据，方便单独开发前端。
+    apiUnavailable.value = false
+  } catch (err) {
+    console.warn('[ShellQuest] 任务列表加载失败，使用本地演示数据:', err)
   }
   if (sessionToken.value) {
     try {
-      const response = await fetch('/api/v1/auth/me', { headers: { 'X-Session-Token': sessionToken.value } })
+      const response = await fetch(apiUrl('/api/v1/auth/me'), { headers: { 'X-Session-Token': sessionToken.value } })
       if (response.ok) authUser.value = await response.json()
       else localStorage.removeItem('shellquest-session')
-    } catch {
-      // 保留匿名预览状态。
+    } catch (err) {
+      console.warn('[ShellQuest] 恢复登录状态失败:', err)
     }
   }
 })
@@ -112,6 +124,14 @@ onMounted(async () => {
 
 <template>
   <main class="app-shell">
+    <div v-if="apiUnavailable" class="api-alert">
+      <span class="alert-mark">⚠</span>
+      <div>
+        <strong>无法连接到后端 API</strong>
+        <small>请检查：① backend 容器是否正常启动 ② nginx 是否可反代到 <code>backend:8000</code> ③ 服务器防火墙是否放行端口。当前 API 前缀：<code>{{ API_BASE || '/api (相对路径，由 nginx 反代)' }}</code></small>
+      </div>
+      <button class="alert-close" @click="apiUnavailable = false" aria-label="关闭提示">×</button>
+    </div>
     <header class="topbar">
       <button class="brand" aria-label="ShellQuest 首页" @click="selectTab('home')">
         <span class="brand-mark">$_</span>
