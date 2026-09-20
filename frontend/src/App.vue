@@ -17,7 +17,133 @@ type UserSummary = {
   username: string
   xp: number
   streak_days: number
+  level: number
+  level_title: string
+  level_xp_earned: number
+  level_xp_total: number
 }
+
+type CheckInStatusType = {
+  today_checked_in: boolean
+  streak_days: number
+  last_checkin_date: string | null
+  consecutive_dates: string[]
+}
+
+type SkillNodeType = {
+  zone: string
+  index: number
+  title: string
+  quest_id: number
+  unlocked: boolean
+  unlocked_at: string | null
+}
+
+type SkillZoneType = {
+  zone: string
+  zone_index: number
+  total_nodes: number
+  unlocked_nodes: number
+  unlocked_percent: number
+  nodes: SkillNodeType[]
+}
+
+type SkillTreeType = {
+  total_nodes: number
+  unlocked_nodes: number
+  total_percent: number
+  zones: SkillZoneType[]
+}
+
+const checkinStatus = ref<CheckInStatusType | null>(null)
+const checkinMessage = ref('')
+const skillTree = ref<SkillTreeType | null>(null)
+const activeSkillZone = ref(0)
+
+const currentSkillZone = computed<SkillZoneType | null>(() => {
+  if (!skillTree.value) return null
+  const idx = Math.max(0, Math.min(activeSkillZone.value, skillTree.value.zones.length - 1))
+  return skillTree.value.zones[idx] ?? null
+})
+
+async function refreshSkillTree(): Promise<void> {
+  if (!sessionToken.value) return
+  try {
+    const response = await fetch(apiUrl('/api/v1/user/skills'), {
+      headers: { 'X-Session-Token': sessionToken.value },
+    })
+    if (response.ok) {
+      skillTree.value = await response.json()
+      if (skillTree.value && activeSkillZone.value >= skillTree.value.zones.length) activeSkillZone.value = 0
+    }
+  } catch (err) {
+    console.warn('[ShellQuest] 加载技能树失败:', err)
+  }
+}
+
+function firstLockedIndex(zone: SkillZoneType): number {
+  return zone.nodes.findIndex((n) => !n.unlocked)
+}
+
+function firstDoneIndex(zone: SkillZoneType): number {
+  let i = 0
+  for (; i < zone.nodes.length - 1; i++) {
+    if (!zone.nodes[i].unlocked || !zone.nodes[i + 1].unlocked) return i
+  }
+  return zone.nodes.length - 1
+}
+
+async function refreshCheckInStatus(): Promise<void> {
+  if (!sessionToken.value) return
+  try {
+    const response = await fetch(apiUrl('/api/v1/checkin/status'), {
+      headers: { 'X-Session-Token': sessionToken.value },
+    })
+    if (response.ok) checkinStatus.value = await response.json()
+  } catch (err) {
+    console.warn('[ShellQuest] 获取打卡状态失败:', err)
+  }
+}
+
+async function performCheckIn(): Promise<void> {
+  if (!sessionToken.value) {
+    showAuth.value = true
+    return
+  }
+  checkinMessage.value = ''
+  try {
+    const response = await fetch(apiUrl('/api/v1/checkin'), {
+      method: 'POST',
+      headers: { 'X-Session-Token': sessionToken.value },
+    })
+    if (!response.ok) return
+    const payload: { already_checked_in: boolean; xp_awarded: number; user: UserSummary; status: CheckInStatusType } = await response.json()
+    checkinStatus.value = payload.status
+    authUser.value = payload.user
+    if (payload.already_checked_in) checkinMessage.value = '今天已经打过卡啦，明天再来～'
+    else checkinMessage.value = `打卡成功 · +${payload.xp_awarded} XP · 连续 ${payload.status.streak_days} 天`
+  } catch (err) {
+    console.error('[ShellQuest] 打卡失败:', err)
+    checkinMessage.value = '打卡失败，请稍后再试。'
+  }
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+const DEFAULT_LEVEL: UserSummary = {
+  id: 0,
+  username: 'guest',
+  xp: 0,
+  streak_days: 0,
+  level: 1,
+  level_title: '初级探索者',
+  level_xp_earned: 0,
+  level_xp_total: 1000,
+}
+
+const displayUser = computed<UserSummary>(() => authUser.value ?? DEFAULT_LEVEL)
 
 const activeTab = ref<'home' | 'quests' | 'search'>('home')
 const query = ref('')
@@ -59,9 +185,35 @@ async function runCommand() {
     const payload: { already_completed: boolean; xp_awarded: number; user: UserSummary } = await response.json()
     authUser.value = payload.user
     completionMessage.value = payload.already_completed ? '该任务已完成，进度已保留。' : `任务完成 · +${payload.xp_awarded} XP`
+    await refreshUserProgress()
+    await refreshCheckInStatus()
+    await refreshSkillTree()
   } catch (err) {
     console.error('[ShellQuest] 保存进度失败:', err)
     completionMessage.value = '已在本地完成演练；暂时无法保存进度，请检查后端服务是否可用。'
+  }
+}
+
+async function refreshUserProgress(): Promise<void> {
+  if (!sessionToken.value) return
+  try {
+    const response = await fetch(apiUrl('/api/v1/user/progress'), {
+      headers: { 'X-Session-Token': sessionToken.value },
+    })
+    if (!response.ok) return
+    const progress: {
+      current_quest_id: number | null
+      quests: Array<Quest & { status: Quest['status'] }>
+      user: UserSummary
+    } = await response.json()
+    const byId = new Map(progress.quests.map((q) => [q.id, q.status]))
+    quests.value = quests.value.map((q) => ({
+      ...q,
+      status: byId.get(q.id) ?? (progress.current_quest_id === q.id ? 'current' : 'locked'),
+    }))
+    authUser.value = progress.user
+  } catch (err) {
+    console.warn('[ShellQuest] 刷新进度失败:', err)
   }
 }
 
@@ -89,6 +241,9 @@ async function submitAuth() {
     showAuth.value = false
     credentials.value = { username: '', password: '' }
     apiUnavailable.value = false
+    await refreshUserProgress()
+    await refreshCheckInStatus()
+    await refreshSkillTree()
   } catch (err) {
     console.error('[ShellQuest] 认证请求失败:', err)
     apiUnavailable.value = true
@@ -97,24 +252,48 @@ async function submitAuth() {
 }
 
 onMounted(async () => {
+  let serverQuests: Quest[] | null = null
   try {
     const response = await fetch(apiUrl('/api/v1/quests'))
-    if (!response.ok) return
-    const apiQuests: Array<Omit<Quest, 'command' | 'status'> & { command_hint: string }> = await response.json()
-    quests.value = apiQuests.map((quest) => ({
-      ...quest,
-      command: quest.command_hint,
-      status: quest.id === 1 ? 'done' : quest.id === 2 ? 'current' : 'locked',
-    }))
-    apiUnavailable.value = false
+    if (response.ok) {
+      const apiQuests: Array<Omit<Quest, 'command' | 'status'> & { command_hint: string }> = await response.json()
+      serverQuests = apiQuests.map((quest) => ({
+        ...quest,
+        command: quest.command_hint,
+        status: quest.id === 1 ? 'current' : 'locked',
+      }))
+      quests.value = serverQuests
+      apiUnavailable.value = false
+    }
   } catch (err) {
     console.warn('[ShellQuest] 任务列表加载失败，使用本地演示数据:', err)
   }
   if (sessionToken.value) {
     try {
-      const response = await fetch(apiUrl('/api/v1/auth/me'), { headers: { 'X-Session-Token': sessionToken.value } })
-      if (response.ok) authUser.value = await response.json()
-      else localStorage.removeItem('shellquest-session')
+      const meResp = await fetch(apiUrl('/api/v1/auth/me'), { headers: { 'X-Session-Token': sessionToken.value } })
+      if (meResp.ok) {
+        authUser.value = await meResp.json()
+        try {
+          const progressResp = await fetch(apiUrl('/api/v1/user/progress'), {
+            headers: { 'X-Session-Token': sessionToken.value },
+          })
+          if (progressResp.ok) {
+            const progress: { current_quest_id: number | null; quests: Array<Quest & { status: Quest['status'] }>; user: UserSummary } = await progressResp.json()
+            const byId = new Map(progress.quests.map((q) => [q.id, q.status]))
+            quests.value = quests.value.map((q) => ({
+              ...q,
+              status: byId.get(q.id) ?? (progress.current_quest_id === q.id ? 'current' : q.id === 1 ? 'current' : 'locked'),
+            }))
+            authUser.value = progress.user
+          }
+        } catch (err) {
+          console.warn('[ShellQuest] 加载用户进度失败:', err)
+        }
+        await refreshCheckInStatus()
+        await refreshSkillTree()
+      } else {
+        localStorage.removeItem('shellquest-session')
+      }
     } catch (err) {
       console.warn('[ShellQuest] 恢复登录状态失败:', err)
     }
@@ -158,22 +337,69 @@ onMounted(async () => {
 
       <aside class="progress-card">
         <p class="eyebrow">你的进度</p>
-        <div class="level-row"><span class="level-badge">LV.01</span><strong>初级探索者</strong></div>
-        <div class="meter"><span style="width: 18%"></span></div>
-        <p class="muted">{{ authUser?.xp ?? 0 }} / 1,000 XP · 下一级还需 {{ 1000 - (authUser?.xp ?? 0) }} XP</p>
-        <div class="streak"><span>⚡</span><div><strong>{{ authUser?.streak_days ?? 0 }} 天</strong><small>连续学习</small></div><button>打卡</button></div>
+        <div class="level-row"><span class="level-badge">LV.{{ pad2(displayUser.level) }}</span><strong>{{ displayUser.level_title }}</strong></div>
+        <div class="meter"><span :style="{ width: `${displayUser.level_xp_total ? Math.min(100, (displayUser.level_xp_earned / displayUser.level_xp_total) * 100) : 0}%` }"></span></div>
+        <p class="muted">{{ displayUser.xp.toLocaleString() }} 总 XP · 本级 {{ displayUser.level_xp_earned.toLocaleString() }} / {{ displayUser.level_xp_total.toLocaleString() }} · 下一级还需 {{ Math.max(0, displayUser.level_xp_total - displayUser.level_xp_earned).toLocaleString() }} XP</p>
+        <div class="streak">
+          <span>⚡</span>
+          <div>
+            <strong>{{ (checkinStatus ?? displayUser).streak_days }} 天</strong>
+            <small>{{ checkinStatus?.today_checked_in ? '今日已打卡' : '连续学习' }}</small>
+          </div>
+          <button :disabled="!!checkinStatus?.today_checked_in" @click="performCheckIn">
+            {{ checkinStatus?.today_checked_in ? '✓ 已打卡' : '打卡' }}
+          </button>
+        </div>
+        <p v-if="checkinMessage" class="checkin-msg">{{ checkinMessage }}</p>
       </aside>
 
       <section class="skill-card panel">
-        <div class="section-heading"><div><p class="eyebrow">技能树</p><h2>文件工坊 <span>01 / 04</span></h2></div><button class="text-button">查看全部 →</button></div>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">技能树{{ skillTree ? ` · 总进度 ${skillTree.unlocked_nodes} / ${skillTree.total_nodes} (${skillTree.total_percent}%)` : '' }}</p>
+            <h2>
+              {{ currentSkillZone?.zone ?? '文件工坊' }}
+              <span>
+                {{ String(currentSkillZone?.unlocked_nodes ?? 0).padStart(2, '0') }} / {{ String(currentSkillZone?.total_nodes ?? 4).padStart(2, '0') }}
+              </span>
+            </h2>
+          </div>
+          <div class="skill-zone-switch">
+            <button
+              v-for="(zone, idx) in (skillTree?.zones ?? [{ zone: '文件工坊', zone_index: 1 }])"
+              :key="zone.zone"
+              :class="['zone-chip', { active: activeSkillZone === idx }]"
+              @click="activeSkillZone = idx"
+              :title="zone.zone"
+            >
+              Z{{ String(zone.zone_index ?? idx + 1).padStart(2, '0') }}
+            </button>
+          </div>
+        </div>
         <div class="skill-path">
-          <div class="skill done"><i>✓</i><span>初入服务器</span></div>
-          <div class="link active-link"></div>
-          <div class="skill current"><i>02</i><span>文件定位</span></div>
-          <div class="link"></div>
-          <div class="skill"><i>03</i><span>安全备份</span></div>
-          <div class="link"></div>
-          <div class="skill"><i>04</i><span>文本追踪</span></div>
+          <template v-if="currentSkillZone">
+            <template v-for="(node, i) in currentSkillZone.nodes" :key="`${node.zone}-${node.index}`">
+              <div
+                :class="[
+                  'skill',
+                  node.unlocked ? 'done' : i === firstLockedIndex(currentSkillZone) ? 'current' : ''
+                ]"
+              >
+                <i>{{ node.unlocked ? '✓' : String(node.index + 1).padStart(2, '0') }}</i>
+                <span>{{ node.title }}</span>
+              </div>
+              <div v-if="i < currentSkillZone.nodes.length - 1" :class="['link', i < firstDoneIndex(currentSkillZone) ? 'active-link' : '']"></div>
+            </template>
+          </template>
+          <template v-else>
+            <div class="skill done"><i>✓</i><span>初入服务器</span></div>
+            <div class="link active-link"></div>
+            <div class="skill current"><i>02</i><span>文件定位</span></div>
+            <div class="link"></div>
+            <div class="skill"><i>03</i><span>安全备份</span></div>
+            <div class="link"></div>
+            <div class="skill"><i>04</i><span>文本追踪</span></div>
+          </template>
         </div>
       </section>
 
