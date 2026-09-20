@@ -1,11 +1,14 @@
+import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 import secrets
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from .database import Base, SessionLocal, engine
@@ -13,6 +16,9 @@ from .models import Quest, QuestCompletion, User, UserSession
 from .schemas import AuthResponse, CompletionResponse, QuestSummary, RegisterRequest, UserSummary
 from .security import hash_password, verify_password
 from .seed_data import QUEST_SEEDS
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("shellquest")
 
 CORS_ORIGINS = [
     origin.strip()
@@ -22,6 +28,9 @@ CORS_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+
+DB_STARTUP_RETRIES = int(os.getenv("DB_STARTUP_RETRIES", "30"))
+DB_STARTUP_INTERVAL = float(os.getenv("DB_STARTUP_INTERVAL", "2"))
 
 
 def get_db():
@@ -71,13 +80,33 @@ def seed_quests(db: Session) -> None:
     if additions:
         db.add_all(additions)
         db.commit()
+        logger.info("已插入 %d 条初始任务", len(additions))
+
+
+def wait_for_db_and_init() -> None:
+    last_error: Exception | None = None
+    for attempt in range(1, DB_STARTUP_RETRIES + 1):
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            logger.info("数据库连接正常（第 %d 次尝试）", attempt)
+            Base.metadata.create_all(bind=engine)
+            with SessionLocal() as db:
+                seed_quests(db)
+            return
+        except OperationalError as exc:
+            last_error = exc
+            logger.warning("数据库未就绪，第 %d/%d 次尝试失败：%s", attempt, DB_STARTUP_RETRIES, exc)
+            time.sleep(DB_STARTUP_INTERVAL)
+    raise RuntimeError(f"数据库连接失败，已重试 {DB_STARTUP_RETRIES} 次：{last_error}")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
-        seed_quests(db)
+    logger.info("ShellQuest API 启动中，正在初始化数据库...")
+    logger.info("CORS_ORIGINS = %s", CORS_ORIGINS)
+    wait_for_db_and_init()
+    logger.info("初始化完成，服务就绪")
     yield
 
 
