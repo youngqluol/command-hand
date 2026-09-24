@@ -16,3 +16,6 @@ __pycache__
 
 # pnpm 在项目目录下产生的临时探测文件
 _tmp_*
+
+# 命令手册导入脚本下载的上游包缓存（内容已导出为 backend/data/commands_seed.json.gz）
+backend/.cache/

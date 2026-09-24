@@ -1,0 +1,220 @@
+{
+  "version": 1,
+  "description": "ShellQuest 命令分类映射表。category 使用课程主题地图的 6 大区域 + 其他；tags 为功能标签，用于精确检索。rules 按顺序匹配，首个命中即生效；commands 为显式覆盖，优先级高于 rules。",
+  "default_category": "其他",
+  "categories": [
+    "文件工坊",
+    "系统哨站",
+    "网络前线",
+    "Shell 作战室",
+    "容器基地",
+    "故障指挥中心",
+    "其他"
+  ],
+  "rules": [
+    { "pattern": "^docker", "category": "容器基地", "tags": ["容器", "镜像"] },
+
+    {
+      "pattern": "^(strace|ltrace|sosreport|sar|dstat|vmstat|iostat|mpstat|slabtop|tload|pidstat|pstack|pmap|watch|time|times|iotop|lnstat)$",
+      "category": "故障指挥中心",
+      "tags": ["排障", "性能"]
+    },
+    {
+      "pattern": "^(dmesg|journalctl|logger|logrotate|logsave|logwatch|fuser)$",
+      "category": "故障指挥中心",
+      "tags": ["排障", "日志"]
+    },
+
+    {
+      "pattern": "^(ssh|sshd|ssh-add|ssh-agent|ssh-copy-id|ssh-keygen|ssh-keyscan|sshpass|scp|sftp|sftp-server|rsync|rcp|rsh|rexec|rlogin|telnet|nc|ncftp|ftp|lftp|lftpget|tftp|uucico|uupick|uuto|nfsstat|showmount|exportfs|iscsiadm|smbclient|smbpasswd)$",
+      "category": "网络前线",
+      "tags": ["网络", "传输"]
+    },
+    {
+      "pattern": "^(curl|wget|axel|elinks|lynx|speedtest-cli)$",
+      "category": "网络前线",
+      "tags": ["网络", "下载"]
+    },
+    {
+      "pattern": "^(ping|ping6|fping|hping3|traceroute|tracepath|mtr|clockdiff|hcitool)$",
+      "category": "网络前线",
+      "tags": ["网络", "连通性"]
+    },
+    {
+      "pattern": "^(ss|netstat|lsof|ifstat|iftop|nethogs|iptraf|iptstate|iperf|nstat)$",
+      "category": "网络前线",
+      "tags": ["网络", "端口"]
+    },
+    {
+      "pattern": "^(tcpdump|tcpreplay|ngrep)$",
+      "category": "网络前线",
+      "tags": ["网络", "抓包"]
+    },
+    {
+      "pattern": "^(dig|nslookup|host|whois|jwhois|bind|named-checkzone)$",
+      "category": "网络前线",
+      "tags": ["网络", "DNS"]
+    },
+    {
+      "pattern": "^(iptables|ip6tables|iptables-restore|iptables-save|ip6tables-restore|ip6tables-save|arptables|arpwatch|firewall-cmd|ufw|pfctl)$",
+      "category": "网络前线",
+      "tags": ["网络", "防火墙"]
+    },
+    {
+      "pattern": "^(ip|ifconfig|ifup|ifdown|ifcfg|route|arp|arpd|arping|ipcalc|ethtool|mii-tool|nmcli|hostname|domainname|nisdomainname|ypdomainname|dnsdomainname|usernetctl)$",
+      "category": "网络前线",
+      "tags": ["网络", "配置"]
+    },
+    {
+      "pattern": "^(squid|squidclient|dhclient|dhcpd|dhcrelay|mail|mailq|mailstat|sendmail|elm|nmap|ab|cu|pssh|ftpcount|ftpshut|ftptop|ftpwho|ppp-off)$",
+      "category": "网络前线",
+      "tags": ["网络", "服务"]
+    },
+
+    {
+      "pattern": "^(alias|unalias|echo|printf|read|export|unset|declare|set|shopt|let|expr|test|true|false|yes|seq|sh|fishshell|source|exec|exit|return|break|continue|shift|trap|type|builtin|command|enable|help|history|fc|jobs|bg|fg|disown|wait|ulimit|umask|mapfile|readonly|local|tput|clear|script|scriptreplay|xargs|tee|env|bc|dc|figlet|bye|logout|which|whereis|times|screen|tmux|stty|tty|pv)$",
+      "category": "Shell 作战室",
+      "tags": ["Shell内建", "脚本"]
+    },
+
+    {
+      "pattern": "^(useradd|userdel|usermod|users|groups|groupadd|groupdel|groupmod|groupmems|gpasswd|passwd|chpasswd|chage|chfn|chsh|su|sudo|pkexec|id|who|w|last|lastb|lastlog|logname|login|nologin|newusers|pwck|pwconv|pwunconv|grpck|grpconv|grpunconv|mesg|wall|write|talk|finger|getent)$",
+      "category": "系统哨站",
+      "tags": ["用户", "权限"]
+    },
+    {
+      "pattern": "^(ps|top|htop|atop|pgrep|pkill|pidof|kill|killall|skill|pstree|nice|renice|nohup|setsid|at|atq|atrm|batch|crontab|supervisord|prtstat|ipcs|ipcrm|pwdx|sleep|systool)$",
+      "category": "系统哨站",
+      "tags": ["进程"]
+    },
+    {
+      "pattern": "^(systemctl|service|chkconfig|ntsysv|rcconf|init|telinit|runlevel|halt|reboot|shutdown|poweroff|suspend|syslog|sysctl|apachectl)$",
+      "category": "系统哨站",
+      "tags": ["服务", "系统控制"]
+    },
+    {
+      "pattern": "^(df|du|lsblk|blkid|fdisk|parted|partprobe|mkfs|mke2fs|e2fsck|e2label|fsck|findfs|mount|umount|swapon|swapoff|mkswap|sync|quota|quotacheck|quotaon|quotaoff|edquota|repquota|convertquota|badblocks|blockdev|hdparm|losetup|smartmontools|ncdu|cdrecord|mkbootdisk|mkinitrd|dris|mknod|dump|restore|eject)$",
+      "category": "系统哨站",
+      "tags": ["磁盘", "文件系统"]
+    },
+    {
+      "pattern": "^(lvcreate|lvdisplay|lvextend|lvreduce|lvremove|lvresize|lvscan|pvchange|pvck|pvcreate|pvdisplay|pvremove|pvs|pvscan|vgchange|vgconvert|vgcreate|vgdisplay|vgextend|vgreduce|vgremove|vgrename|vgscan)$",
+      "category": "系统哨站",
+      "tags": ["磁盘", "LVM"]
+    },
+    {
+      "pattern": "^(uname|hostnamectl|hostid|arch|lsb_release|lscpu|lsmod|modinfo|modprobe|insmod|rmmod|depmod|get_module|lsusb|lspci|setpci|dmidecode|hwclock|date|timedatectl|clock|cal|ntpdate|kernelversion|neofetch|ldd|ldconfig|free|nproc|vdfuse|uptime)$",
+      "category": "系统哨站",
+      "tags": ["系统信息", "硬件"]
+    },
+    {
+      "pattern": "^(getcap|getenforce|getsebool|setsebool|seinfo|sesearch|semanage|chcon|restorecon|grub|grub2-mkconfig|grub2-set-default|lilo|kexec|chroot|consoletype)$",
+      "category": "系统哨站",
+      "tags": ["系统控制", "SELinux"]
+    },
+
+    {
+      "pattern": "^(grep|egrep|fgrep|ack|ag|sed|awk|perl|sort|uniq|wc|tr|cut|paste|join|comm|fold|fmt|column|col|colrm|expand|unexpand|nl|od|hexdump|base64|md5sum|sha256sum|cksum|sum|cmp|diff|diff3|diffstat|patch|head|tail|tailf|cat|tac|more|less|rev|shuf|spell|ispell|look|split|csplit|iconv|dos2unix|indent)$",
+      "category": "文件工坊",
+      "tags": ["文本", "处理"]
+    },
+    {
+      "pattern": "^(ls|cp|mv|rm|rmdir|mkdir|ln|touch|install|mktemp|tempfile|basename|dirname|realpath|stat|file|find|locate|slocate|updatedb|tree|rename|pathchk|dirs|pushd|popd|cd|pwd|dd|cpio|dircolors|unlink|inotifywait|pr|ex)$",
+      "category": "文件工坊",
+      "tags": ["文件", "目录"]
+    },
+    {
+      "pattern": "^(chmod|chown|chgrp|setfacl|getfacl|lsattr|chattr)$",
+      "category": "文件工坊",
+      "tags": ["权限"]
+    },
+    {
+      "pattern": "^(tar|gzip|gunzip|zcat|bzip2|bunzip2|bzcat|bzcmp|bzdiff|bzgrep|bzip2recover|bzless|bzmore|xz|zip|unzip|zipinfo|zipsplit|zfore|znew|gzexe|compress|uncompress|pigz|7z|ar|arj|unarj|lha|unrar|rpm2cpio|mkisofs|volname|mtools)$",
+      "category": "文件工坊",
+      "tags": ["压缩归档"]
+    },
+    {
+      "pattern": "^(vi|nano|pico|ed|emacs|jed|joe)$",
+      "category": "文件工坊",
+      "tags": ["编辑器"]
+    },
+
+    {
+      "pattern": "^(man|info|whatis|apropos)$",
+      "category": "其他",
+      "tags": ["帮助文档"]
+    },
+    {
+      "pattern": "^(rpm|rpmdb|rpmquery|rpmverify|rpmsign|rpmbuild|yum|dnf|reposync|createrepo|dpkg|dpkg-deb|dpkg-divert|dpkg-preconfigure|dpkg-query|dpkg-reconfigure|dpkg-split|dpkg-statoverride|dpkg-trigger|apt-get|apt-key|apt-sortpkgs|aptitude|apk|pacman|pip)$",
+      "category": "其他",
+      "tags": ["包管理"]
+    },
+    {
+      "pattern": "^(make|git|gcc|gdb|gcov|nm|objdump|readelf|ld|protoize|unprotoize|strings|jq|as)$",
+      "category": "其他",
+      "tags": ["开发工具"]
+    },
+    {
+      "pattern": "^(mysql|mysqladmin|mysqldump|mysqlimport|mysqlshow|php|pip)$",
+      "category": "其他",
+      "tags": ["数据库", "运行时"]
+    },
+    {
+      "pattern": "^(openssl|gpg|mkcert|htdigest|htpasswd)$",
+      "category": "其他",
+      "tags": ["安全"]
+    },
+    {
+      "pattern": "^(lp|lpadmin|lpc|lpq|lpr|lprm|lpstat|accept|cancel|cupsdisable|cupsenable|gpm|startx|xauth|xclip|xhost|xinit|xlsatoms|xlsclients|xlsfonts|xrandr|xset|modetest|reject)$",
+      "category": "其他",
+      "tags": ["外设"]
+    }
+  ],
+  "commands": {
+    "whoami": { "category": "系统哨站", "tags": ["用户", "系统信息"] },
+    "pwd": { "category": "文件工坊", "tags": ["目录"] },
+    "ls": { "category": "文件工坊", "tags": ["文件", "目录"] },
+    "find": { "category": "文件工坊", "tags": ["文件", "查找"] },
+    "grep": { "category": "文件工坊", "tags": ["文本", "查找"] },
+    "awk": { "category": "文件工坊", "tags": ["文本", "处理"] },
+    "sed": { "category": "文件工坊", "tags": ["文本", "处理"] },
+    "chmod": { "category": "文件工坊", "tags": ["权限"] },
+    "chown": { "category": "文件工坊", "tags": ["权限"] },
+    "tar": { "category": "文件工坊", "tags": ["压缩归档"] },
+
+    "uname": { "category": "系统哨站", "tags": ["系统信息"] },
+    "ps": { "category": "系统哨站", "tags": ["进程"] },
+    "kill": { "category": "系统哨站", "tags": ["进程"] },
+    "systemctl": { "category": "系统哨站", "tags": ["服务"] },
+    "journalctl": { "category": "系统哨站", "tags": ["日志", "服务"] },
+    "df": { "category": "系统哨站", "tags": ["磁盘"] },
+    "du": { "category": "系统哨站", "tags": ["磁盘"] },
+    "top": { "category": "系统哨站", "tags": ["进程", "性能"] },
+    "sudo": { "category": "系统哨站", "tags": ["权限提升"] },
+    "id": { "category": "系统哨站", "tags": ["用户"] },
+
+    "ss": { "category": "网络前线", "tags": ["网络", "端口"] },
+    "netstat": { "category": "网络前线", "tags": ["网络", "端口"] },
+    "lsof": { "category": "网络前线", "tags": ["网络", "端口"] },
+    "curl": { "category": "网络前线", "tags": ["网络", "下载"] },
+    "ping": { "category": "网络前线", "tags": ["网络", "连通性"] },
+    "ssh": { "category": "网络前线", "tags": ["网络", "远程"] },
+    "scp": { "category": "网络前线", "tags": ["网络", "传输"] },
+    "rsync": { "category": "网络前线", "tags": ["网络", "传输"] },
+    "dig": { "category": "网络前线", "tags": ["网络", "DNS"] },
+    "nslookup": { "category": "网络前线", "tags": ["网络", "DNS"] },
+    "tcpdump": { "category": "网络前线", "tags": ["网络", "抓包"] },
+
+    "echo": { "category": "Shell 作战室", "tags": ["Shell内建"] },
+    "xargs": { "category": "Shell 作战室", "tags": ["Shell内建", "管道"] },
+    "tee": { "category": "Shell 作战室", "tags": ["重定向"] },
+    "export": { "category": "Shell 作战室", "tags": ["Shell内建", "变量"] },
+    "wc": { "category": "Shell 作战室", "tags": ["文本", "统计"] },
+    "uniq": { "category": "Shell 作战室", "tags": ["文本", "统计"] },
+
+    "docker": { "category": "容器基地", "tags": ["容器", "镜像"] },
+
+    "strace": { "category": "故障指挥中心", "tags": ["排障"] },
+    "vmstat": { "category": "故障指挥中心", "tags": ["排障", "性能"] }
+  }
+}

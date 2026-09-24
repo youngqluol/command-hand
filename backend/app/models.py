@@ -157,3 +157,51 @@ class SkillProgress(Base):
     zone: Mapped[str] = mapped_column(String(64), index=True)
     node_index: Mapped[int] = mapped_column(Integer)
     unlocked_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Command(Base):
+    """命令手册条目。
+
+    内容由 scripts/import_commands.py 从 jaywcjlove/linux-command（MIT）导入。
+    body_markdown 是原文全文，永远保留；syntax / options / examples 是尽力提取的结构化字段，
+    提取失败时为 NULL，前端降级为渲染 sections 中的原文段落。
+    """
+
+    __tablename__ = "commands"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    summary: Mapped[str] = mapped_column(String(512))
+    body_markdown: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(64), index=True)
+    syntax: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sections: Mapped[list] = mapped_column(JSON, default=list)
+    options: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    examples: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    search_text: Mapped[str] = mapped_column(Text)
+    source_url: Mapped[str] = mapped_column(String(512))
+    license: Mapped[str] = mapped_column(String(16), default="MIT")
+    source_version: Mapped[str] = mapped_column(String(32), default="")
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    tags: Mapped[list["CommandTag"]] = relationship(
+        back_populates="command",
+        order_by="CommandTag.tag",
+        cascade="all, delete-orphan",
+    )
+
+
+class CommandTag(Base):
+    """命令的功能标签，用于多标签组合筛选。"""
+
+    __tablename__ = "command_tags"
+    __table_args__ = (UniqueConstraint("command_id", "tag", name="uq_command_tag"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    command_id: Mapped[int] = mapped_column(ForeignKey("commands.id"), index=True)
+    tag: Mapped[str] = mapped_column(String(64), index=True)
+
+    command: Mapped[Command] = relationship(back_populates="tags")

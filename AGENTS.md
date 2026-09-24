@@ -28,6 +28,7 @@
 | 新增 / 删除 / 修改接口 | §4、§2 |
 | 新增 / 修改数据模型、表、字段 | §4.4、§6 |
 | 新增 / 修改课程单元、题目、题型、判题规则 | §4.4、§4.5、§4.7、`COURSE_DESIGN.md` |
+| 新增 / 修改命令导入、分类映射、检索逻辑 | §2、§4.8、`REQUIREMENTS.md` §4.4 |
 | 业务规则调整（XP、等级、称号、解锁、打卡） | §4.5 |
 | 前端工具链、目录约定、样式约定变化 | §5 |
 | 依赖、启动方式、端口变化 | §2 |
@@ -96,6 +97,42 @@ uvicorn app.main:app --reload --port 8000
 自检覆盖：`order` 连续性、区域名合法性、题型/判题器合法性、`judge_payload` 结构、
 选择题选项与 `correct_keys` 的一致性、每题是否关联了命令。详见 §4.7。
 
+**端到端冒烟测试**（在临时 SQLite 库上跑完整链路，不碰开发库、不留文件）：
+
+```bash
+.venv/Scripts/python scripts/smoke_test.py
+```
+
+覆盖：课程落库 → 注册 → 判题 → 单元锁拦截 → 进度 → 命令手册载入 → 命令详情/404 →
+关键词检索 → 自然语言检索 → 兜底建议 → 打卡 → 技能树。改完后端接口或检索逻辑后跑一遍，
+比逐个 curl 快。断言里的 `21 / 63 / 614` 是当前数据快照的规模，课程或上游版本变化时要同步改。
+
+### 命令手册导入（工作目录 `backend/`）
+
+命令手册数据来自上游 `jaywcjlove/linux-command`（MIT），**手动触发、不自动同步**（见 §4.8）。
+
+```bash
+# 常规导入：下载上游 npm 包 → 解析 → 幂等写库 → 导出种子快照
+.venv/Scripts/python scripts/import_commands.py --export
+
+# 预演，只看分类分布与提取成功率，不写库
+.venv/Scripts/python scripts/import_commands.py --dry-run
+
+# 只用本地缓存（离线环境）
+.venv/Scripts/python scripts/import_commands.py --offline
+
+# 用已解包的上游目录（跳过下载）
+.venv/Scripts/python scripts/import_commands.py --source-dir /path/to/linux-command/package
+
+# 强制重新拉取上游
+.venv/Scripts/python scripts/import_commands.py --refresh --export
+```
+
+`--export` 会把结果导出为 `backend/data/commands_seed.json.gz`，**该文件需要提交**：
+容器构建期没有网络，启动时若 `commands` 表为空会从这个快照自动灌入。
+
+**导入了新内容后必须提交快照**，否则 Docker 环境拿不到更新。
+
 ### 前端（工作目录 `frontend/`）
 
 **只使用 pnpm**（见 §0.4）。首次使用先启用 Corepack：`corepack enable`。
@@ -129,10 +166,12 @@ docker compose up --build     # 前端 :8080，后端 :8000，MySQL :3306，Redi
 backend/
   app/
     main.py        # 全部 HTTP 路由 + 判题引擎 + 课程落库 + 解锁算法 + 打卡逻辑
-    models.py      # SQLAlchemy 模型，9 张表
+    models.py      # SQLAlchemy 模型，11 张表
     schemas.py     # Pydantic 请求/响应模型 + 等级、称号、经验进度计算
     database.py    # engine / SessionLocal / Base
     security.py    # scrypt 口令哈希与校验
+    command_search.py  # 命令检索：关键词字段加权 + 自然语言（从课程关卡派生）
+    command_seed.py    # 命令落库与离线种子快照的导出/载入
     curriculum/    # 课程内容：21 个单元 / 63 道题，按主题区域分 6 个模块
       __init__.py      # 汇总 6 个区域模块为 UNITS，顺序必须与 ZONE_ORDER 一致
       zone_file.py     # 文件工坊     单元 01–04
@@ -141,6 +180,12 @@ backend/
       zone_shell.py    # Shell 作战室 单元 13–16
       zone_container.py# 容器基地     单元 17–19
       zone_incident.py # 故障指挥中心 单元 20–21
+  scripts/
+    import_commands.py     # 命令手册导入（下载 / 解析 / 幂等写库 / 导出快照）
+    command_taxonomy.json  # 命令分类与标签映射表（自建，见 §4.8）
+    smoke_test.py          # 端到端冒烟测试（临时库，见 §2）
+  data/
+    commands_seed.json.gz  # 命令手册离线快照，**必须提交**（见 §4.8）
   requirements.txt
   requirements-dev.txt
   shellquest.db    # 本地 SQLite（gitignore，勿提交）
@@ -219,6 +264,12 @@ X-Session-Token: <token>
 | `user_sessions` | 登录会话 | `token` 唯一 |
 | `check_ins` | 每日打卡 | `(user_id, checkin_date)` 唯一 |
 | `skill_progress` | 技能节点点亮，**绑定课程单元** | `(user_id, unit_id)` 唯一 |
+| `commands` | 命令手册条目（614 条），含原文全文与结构化字段 | `name` 唯一，`content_hash` 用于幂等导入 |
+| `command_tags` | 命令的功能标签 | `(command_id, tag)` 唯一 |
+
+`commands` 的字段语义、来源与提取策略见 `REQUIREMENTS.md` §4.4.3 / §4.4.4，运维方式见 §4.8。
+其中 `sections` / `options` / `examples` 是 `JSON` 列，**可为 NULL**（表示提取失败，
+前端降级为渲染 `body_markdown`）。`body_markdown` 永远保留原文，任何解析失败都不得丢内容。
 
 `quests.judge_payload` 是 `JSON` 列，其结构由 `judge_type` 决定：
 
@@ -339,6 +390,65 @@ ZONE_ORDER = ["文件工坊", "系统哨站", "网络前线", "Shell 作战室",
 
 **题目的 `order` 由列表位置自动推导（全局连续 1..63），种子数据里不写 `order`。**
 在列表中间插入题目会导致其后所有题目的 `order` 位移，进而使历史完成记录错位 —— 优先追加到末尾。
+
+### 4.8 命令手册（`commands` / `command_tags`）
+
+数据来自上游 `jaywcjlove/linux-command`（MIT），**手动导入、不自动同步**。
+导入脚本见 §2，解析与分类的细节见 `REQUIREMENTS.md` §4.4。
+
+**职责划分**
+
+| 文件 | 负责 |
+| --- | --- |
+| `scripts/import_commands.py` | 取上游（npm tarball）+ 解析 Markdown + 分类映射 |
+| `scripts/command_taxonomy.json` | 分类与标签映射表（**数据，不是代码**） |
+| `app/command_seed.py` | 写库（幂等）、种子快照导出 / 载入 |
+| `app/command_search.py` | 关键词加权检索 + 自然语言检索（词表从课程派生） |
+| `app/main.py` | `/api/v1/commands*` 四个路由 |
+
+**上游没有分类数据**，`category` 与 `tags` 全部由 `command_taxonomy.json` 决定：
+`rules` 按顺序正则匹配（首个命中即生效），`commands` 为显式覆盖且优先级最高。
+新增分类值时必须同时加进 `categories` 数组，否则导入脚本会直接报错。
+
+**关键常量**
+
+```python
+# main.py —— 命令分类的展示顺序 = 课程 6 区域 + 其他
+COMMAND_CATEGORY_ORDER = [*ZONE_ORDER, "其他"]
+
+# command_search.py —— 关键词字段权重（高 → 低）
+FIELD_WEIGHTS = {"name_exact": 1000, "name_prefix": 600, "name_contains": 400,
+                 "tag_exact": 300, "summary": 200, "option": 120, "body": 60}
+COURSE_COMMAND_BOOST = 150   # 课程关卡声明过的命令在并列时优先
+
+# command_search.py —— 兜底建议（suggest_commands）的两个截断阈值
+SUGGEST_MAX_DF_RATIO = 0.25  # 命中超过 25% 语料的词元视为泛词，直接丢弃
+SUGGEST_TERM_TOPK = 6        # 每个词元只取最强的 6 条候选
+```
+
+**三处容易踩的坑**
+
+1. **中文 n-gram 会重复计分。** 中文不做分词，按 2-gram / 3-gram 建索引，
+   「服务器」会同时产生 `服务` / `务器` / `服务器` 三个词元。若都计分，等于把同一个词算三遍，
+   会把只命中一个常见词的长文档顶到命中两个关键词的短文档前面。
+   `select_matched_terms()` 只保留**最长匹配**，改动检索逻辑时不要绕过它。
+2. **区域名不参与自然语言索引。** 单元标题与目标参与索引（用户问「怎么传到远程服务器」时，
+   信号在单元名「远程发布」上），但区域名（如「文件工坊」）不参与 ——
+   它带来的是「文件」这类高频泛词，会把同区域所有关卡一起抬高。
+3. **整句问法不能直接拿去做关键词检索。** `keyword_search()` 用的是 `LIKE` 粗筛，
+   「查看某个端口被谁占用」不是任何命令的子串，必然零命中。所以兜底建议走
+   `suggest_commands()`：先拆词元（中文只取 2-gram，3-gram 太具体）、逐个检索、
+   再按 `得分 × IDF` 跨词元累计。**不能按「哪个词先命中就用哪个」拼装**，
+   否则「查看」「占用」这类泛词的偶然命中会排在 `lsof` 前面。同理，
+   不加 `SUGGEST_MAX_DF_RATIO` 截断的话，「怎么压缩目录」里命中 182/614 条的「目录」
+   会盖过真正相关的 `gzip` / `tar`。
+
+**种子快照 `data/commands_seed.json.gz` 必须提交。** 容器构建期无网络，启动时若 `commands`
+表为空会从快照灌入（`ensure_commands_seeded`）。导入新内容后忘了提交快照，Docker 环境就拿不到更新。
+
+**`search_text` 的用途**：只作为关键词检索的**粗筛**字段（单次 `LIKE` 过滤掉绝大多数行），
+真正的排序由 `score_command()` 逐字段打分完成。不要用 `search_text` 的位置做相关性判断 ——
+它的拼接顺序（名称 → 简介 → 分类 → 标签 → 选项 → 正文）与权重无关。
 
 ---
 
@@ -527,6 +637,10 @@ RUN pnpm install --frozen-lockfile
 | `models.py` 的**表/列定义** | 必须重建数据库（见上） |
 | `curriculum/` 的**题目内容** | 重启即可，`seed_curriculum()` 会幂等同步（见 §4.7） |
 | `curriculum/` 中**增删单元/题目**（`order` 位移） | 必须重建数据库，否则历史完成记录错位 |
+| 命令手册内容 | 重跑导入脚本（`--export`）并提交快照；已有库会被幂等更新，无需重建（见 §4.8） |
+
+MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB）。
+单条命令的正文最长约 13 KB，目前安全；若上游出现超长文档，需要改用 `MEDIUMTEXT`。
 
 ---
 
@@ -536,23 +650,30 @@ RUN pnpm install --frozen-lockfile
 
 | 需求 | 现状 |
 | --- | --- |
-| 4.4 命令速查 + 自然语言搜索 | 后端无接口；前端搜索页是**硬编码**，任何输入都只显示 `ss -ltnp` 一张卡片 |
+| 4.4 命令查询的前端页面 | 后端已完整（导入脚本 + 614 条数据 + 列表/分面/详情/搜索接口），**前端仍是硬编码**：搜索页任何输入都只显示 `ss -ltnp` 一张卡片 |
 | 4.1 自由闯关主题地图 | 无地图视图。**数据结构已就绪**（`/api/v1/units` 返回按 `zone` 分组的单元 + 状态），但前端尚无地图页面 |
 | 4.3 成就 / 徽章 / 公开排行榜 | 前后端均无实现 |
-| 4.4.10 题目 ↔ 命令双向跳转 | **数据已就绪**（`quest_commands` 表 + 每题 `commands` 字段），但命令查询模块尚未实现，跳转链路未打通 |
+| 4.2 四种题型的前端交互 | 后端判题与作答接口已就绪，前端仍是单一模拟终端 |
+| 4.4.8 命令 → 任务的前端跳转入口 | 后端数据已就绪（详情接口返回 `related_quests`），前端无入口 |
 
 已补齐、从本表移除的条目：
 
 - ~~4.1.1 场景化出题~~ —— 已由 `CourseUnit` / `Quest` / `QuestOption` 三层模型 + `curriculum/` 承载
-- ~~4.2 多种练习题型~~ —— 已支持 `terminal` / `fill` / `choice` / `judge` 四种题型与 5 种判题器
+- ~~4.2 多种练习题型~~ —— 后端已支持 `terminal` / `fill` / `choice` / `judge` 四种题型与 5 种判题器
+- ~~4.4 命令速查的后端能力~~ —— 导入脚本、614 条数据、列表 / 分面 / 详情 / 关键词 / 自然语言检索接口均已实现
+- ~~4.4.8 命令 ↔ 任务关联的数据~~ —— 由 `quest_commands` 承载，与自然语言词表同源
 
 其他待改进项：
 
 - `login` 复用了 `RegisterRequest`（语义上应拆出 `LoginRequest`）
 - `redis` 已在 compose 中启动但代码零引用；需求中的排行榜/会话若落地，应优先接入 Redis
 - `submit_quest()` 中 `db.commit()` 被多次调用（`do_checkin` 内一次 + 函数末尾一次），逻辑可合并
-- `main.py` 仍是单文件承载全部路由；接口数量增长后需要评估是否拆分 `APIRouter`
-- `curriculum/` 的题目内容目前为**手工撰写**，尚未与上游命令库做交叉校验（命令名可能写错）
+- `main.py` 已承载全部路由（课程 + 打卡 + 认证 + 命令查询），继续增长需要评估是否拆分 `APIRouter`
+- `curriculum/` 的题目内容目前为**手工撰写**，命令名未与上游命令库做交叉校验（可能写错）
+- 上游有 38 条命令未提取出结构化选项、158 条未提取出示例（多为原文本身就没有该章节），
+  详情页需保证渲染原文的降级路径可用
+- `容器基地` 分类只有 `docker` 一条 —— 上游 614 条命令里确实没有其他容器工具（无 podman / kubectl / helm）
+- 课程没有覆盖「压缩归档」主题，因此 34 条压缩类命令在自然语言检索里找不到对应关卡
 
 ---
 
@@ -608,6 +729,9 @@ feat: gitignore
 - [ ] 调整了 XP / 等级 / 称号数值 → `main.py`、`schemas.py`、`App.vue` 的 `DEFAULT_LEVEL` 是否同步？
 - [ ] 新增接口 → 是否加了 `/api/v1` 前缀？是否需要 `Depends(get_current_user)`？是否已加入 `schemas.py` 的响应模型？
 - [ ] 新增接口 → 是否**泄露了答案**（`answer_display` / `judge_payload` / `is_correct`）？答案只允许在提交接口返回
+- [ ] 改了命令导入逻辑或映射表 → 是否重跑 `--export` 并**提交了 `backend/data/commands_seed.json.gz`**？（见 §4.8）
+- [ ] 改了后端接口、判题、解锁或检索逻辑 → 是否跑过 `scripts/smoke_test.py` 且全部通过？（见 §2）
+- [ ] 新增命令分类值 → 是否加进了 `command_taxonomy.json` 的 `categories` 数组？`main.py` 的 `COMMAND_CATEGORY_ORDER` 是否同步？
 - [ ] 前端改动 → `pnpm run build` 是否通过（含 `vue-tsc` 类型检查）？`pnpm run lint` 是否零错误？（见 §0.3）
 - [ ] 本次改动涉及的文件，是否都已按 §12.1 同步更新了对应文档？（见 §0.1）
 - [ ] `AGENTS.md` 是否已按 §0.2 同步？若有缺口被补齐，§7 的条目是否已删除？
@@ -645,6 +769,7 @@ feat: gitignore
 | 目录结构、架构、约定、命令、已知缺口 | `AGENTS.md`（本文件） |
 | 数据结构（模型 / 表 / 字段） | `AGENTS.md` §4.4 + §6 |
 | 课程内容（题目、选项、判题规则、命令关联） | `AGENTS.md` §4.4 + §4.7 + `COURSE_DESIGN.md` |
+| 命令手册（导入脚本、分类映射、检索、种子快照） | `AGENTS.md` §2 + §4.8 + `REQUIREMENTS.md` §4.4 |
 | 业务规则（XP、等级、解锁、打卡） | `AGENTS.md` §4.5 |
 | 前端工具链与代码质量配置 | `AGENTS.md` §5.6 + `README.md` |
 | 包管理器与锁文件策略 | `AGENTS.md` §5.7 + `README.md` |

@@ -42,7 +42,21 @@ uvicorn app.main:app --reload --port 8000
 .venv/Scripts/python -c "from app.main import validate_curriculum; validate_curriculum()"
 ```
 
-> 若数据库是旧版本（`quests` 表结构不同），首次启动会因表结构不匹配而报错，
+命令手册（614 条命令，来自 [jaywcjlove/linux-command](https://github.com/jaywcjlove/linux-command)，MIT 许可）
+的离线快照已提交在 `backend/data/commands_seed.json.gz`，启动时若数据库为空会自动载入，**无需联网**。
+需要更新上游内容时手动执行导入脚本：
+
+```bash
+.venv/Scripts/python scripts/import_commands.py --export   # 拉取上游 → 解析 → 写库 → 更新快照
+```
+
+端到端冒烟测试（临时 SQLite 库，不碰开发库）：
+
+```bash
+.venv/Scripts/python scripts/smoke_test.py   # 课程 / 认证 / 判题 / 解锁 / 命令手册 / 检索 / 打卡 / 技能树
+```
+
+> 若数据库是旧版本（表结构不同），首次启动会因表结构不匹配而报错，
 > 需要先删除 `backend/shellquest.db` 再启动。详见 `AGENTS.md` §6。
 
 访问 `http://localhost:5173`，API 文档位于 `http://localhost:8000/docs`。

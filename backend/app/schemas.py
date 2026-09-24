@@ -210,3 +210,112 @@ class SkillTree(BaseModel):
     unlocked_nodes: int
     total_percent: float
     zones: list[SkillZone]
+
+
+# --------------------------------------------------------------------------- #
+# 命令查询（REQUIREMENTS.md §4.4）
+# --------------------------------------------------------------------------- #
+
+
+class CommandListItem(BaseModel):
+    name: str
+    summary: str
+    category: str
+    tags: list[str] = []
+
+
+class CommandSection(BaseModel):
+    """上游 Markdown 的一个章节。role 用于前端按 4.4.5 的顺序排版，extra 表示未识别的标题。"""
+
+    title: str
+    role: str
+    level: int
+    content: str
+
+    model_config = {"extra": "ignore"}
+
+
+class CommandOption(BaseModel):
+    flag: str
+    desc: str = ""
+    group: str | None = None
+
+    model_config = {"extra": "ignore"}
+
+
+class CommandExample(BaseModel):
+    description: str = ""
+    code: str
+
+    model_config = {"extra": "ignore"}
+
+
+class RelatedQuest(BaseModel):
+    """命令 → 任务的关联，数据来自 quest_commands（由课程关卡声明的 commands 生成）。"""
+
+    unit_id: int
+    unit_order: int
+    zone: str
+    unit_title: str
+    quest_id: int
+    quest_order: int
+    quest_title: str
+    quest_kind: QuestKind
+
+
+class CommandDetail(CommandListItem):
+    syntax: str | None = None
+    sections: list[CommandSection] = []
+    options: list[CommandOption] | None = None
+    examples: list[CommandExample] | None = None
+    body_markdown: str
+    source_url: str
+    license: str
+    source_version: str
+    related_commands: list[CommandListItem] = []
+    related_quests: list[RelatedQuest] = []
+
+
+class CommandPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[CommandListItem]
+
+
+class CommandCategoryCount(BaseModel):
+    category: str
+    count: int
+
+
+class CommandTagCount(BaseModel):
+    tag: str
+    count: int
+
+
+class CommandLetterCount(BaseModel):
+    letter: str
+    count: int
+
+
+class CommandFacets(BaseModel):
+    total: int
+    categories: list[CommandCategoryCount]
+    tags: list[CommandTagCount]
+    letters: list[CommandLetterCount]
+
+
+class CommandSearchHit(BaseModel):
+    command: CommandListItem
+    score: float
+    matched_field: str
+    snippet: str
+    related_quests: list[RelatedQuest] = []
+
+
+class CommandSearchResult(BaseModel):
+    mode: Literal["keyword", "natural"]
+    query: str
+    total: int
+    hits: list[CommandSearchHit]
+    suggestions: list[str] = []

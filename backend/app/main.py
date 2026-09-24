@@ -15,17 +15,27 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, selectinload
 
+from .command_search import (
+    PhrasingIndex,
+    build_phrasing_index,
+    keyword_search,
+    suggest_commands,
+)
+from .command_seed import command_count, ensure_commands_seeded
 from .curriculum import UNITS as CURRICULUM
 from .database import Base, SessionLocal, engine
 from .models import (
     CheckIn,
+    Command,
+    CommandTag,
     CourseUnit,
     Quest,
     QuestCommand,
@@ -39,9 +49,19 @@ from .schemas import (
     AuthResponse,
     CheckInResponse,
     CheckInStatus,
+    CommandCategoryCount,
+    CommandDetail,
+    CommandFacets,
+    CommandLetterCount,
+    CommandListItem,
+    CommandPage,
+    CommandSearchHit,
+    CommandSearchResult,
+    CommandTagCount,
     QuestOptionPublic,
     QuestPublic,
     RegisterRequest,
+    RelatedQuest,
     SkillNode,
     SkillTree,
     SkillZone,
@@ -62,6 +82,15 @@ STREAK_LOOKBACK = 30
 
 # 区域顺序：必须与 app/curriculum 的拼装顺序一致，否则技能树会错位。
 ZONE_ORDER = ["文件工坊", "系统哨站", "网络前线", "Shell 作战室", "容器基地", "故障指挥中心"]
+
+# 命令手册的分类取值域 = 课程 6 大区域 + 其他（见 REQUIREMENTS.md §4.4.4）
+COMMAND_CATEGORY_ORDER = [*ZONE_ORDER, "其他"]
+
+COMMAND_PAGE_SIZE_MAX = 100
+
+# 命令手册的离线种子快照（由 scripts/import_commands.py --export 生成）。
+# 运行期不联网：数据库为空时从这里灌入，详见 app/command_seed.py 的说明。
+COMMAND_SEED_PATH = Path(__file__).resolve().parents[1] / "data" / "commands_seed.json.gz"
 
 VALID_KINDS = {"terminal", "fill", "choice", "judge"}
 VALID_JUDGE_TYPES = {"contains_all", "contains_any", "regex", "equals", "option"}
@@ -432,6 +461,8 @@ def wait_for_db_and_init() -> None:
             Base.metadata.create_all(bind=engine)
             with SessionLocal() as db:
                 seed_curriculum(db)
+                ensure_commands_seeded(db, COMMAND_SEED_PATH)
+                logger.info("命令手册现有 %d 条记录", command_count(db))
             return
         except OperationalError as exc:
             last_error = exc
@@ -927,4 +958,259 @@ def submit_quest(
         pitfalls=quest.pitfalls or "",
         safer_alt=quest.safer_alt or "",
         user=UserSummary.model_validate(user),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 命令查询（REQUIREMENTS.md §4.4）
+# --------------------------------------------------------------------------- #
+
+_phrasing_index: PhrasingIndex | None = None
+
+
+def phrasing_index(db: Session) -> PhrasingIndex:
+    """自然语言检索的倒排索引。课程内容在运行期不变，构建一次即可。"""
+    global _phrasing_index
+    if _phrasing_index is None:
+        _phrasing_index = build_phrasing_index(db)
+    return _phrasing_index
+
+
+def command_list_item(row: Command) -> CommandListItem:
+    return CommandListItem(
+        name=row.name,
+        summary=row.summary,
+        category=row.category,
+        tags=[tag.tag for tag in row.tags],
+    )
+
+
+def related_quests_map(db: Session, names: set[str]) -> dict[str, list[RelatedQuest]]:
+    """批量取「命令 → 任务」关联，避免搜索结果逐条查库。"""
+    result: dict[str, list[RelatedQuest]] = {name: [] for name in names}
+    if not names:
+        return result
+    rows = db.execute(
+        select(QuestCommand.command_name, CourseUnit, Quest)
+        .join(Quest, Quest.id == QuestCommand.quest_id)
+        .join(CourseUnit, CourseUnit.id == Quest.unit_id)
+        .where(QuestCommand.command_name.in_(names))
+        .order_by(CourseUnit.order, Quest.order)
+    ).all()
+    for command_name, unit, quest in rows:
+        result.setdefault(command_name, []).append(
+            RelatedQuest(
+                unit_id=unit.id,
+                unit_order=unit.order,
+                zone=unit.zone,
+                unit_title=unit.title,
+                quest_id=quest.id,
+                quest_order=quest.order,
+                quest_title=quest.title,
+                quest_kind=quest.kind,
+            )
+        )
+    return result
+
+
+def related_commands_for(db: Session, row: Command, limit: int = 8) -> list[CommandListItem]:
+    """按共享标签数量推荐相关命令。"""
+    tags = [tag.tag for tag in row.tags]
+    if not tags:
+        return []
+    candidates = db.scalars(
+        select(Command)
+        .join(CommandTag, CommandTag.command_id == Command.id)
+        .where(CommandTag.tag.in_(tags), Command.id != row.id)
+        .options(selectinload(Command.tags))
+    ).all()
+    scored: list[tuple[int, Command]] = []
+    for candidate in {item.id: item for item in candidates}.values():
+        shared = len(set(tags) & {tag.tag for tag in candidate.tags})
+        scored.append((shared, candidate))
+    scored.sort(key=lambda item: (-item[0], item[1].name))
+    return [command_list_item(item) for _, item in scored[:limit]]
+
+
+def command_filters(category: str | None, tag: str | None, letter: str | None) -> list:
+    conditions = []
+    if category:
+        conditions.append(Command.category == category)
+    if tag:
+        conditions.append(
+            Command.id.in_(select(CommandTag.command_id).where(CommandTag.tag == tag))
+        )
+    if letter:
+        first = func.lower(func.substr(Command.name, 1, 1))
+        if letter == "#":
+            conditions.append(first.notin_(list("abcdefghijklmnopqrstuvwxyz")))
+        else:
+            conditions.append(first == letter.lower())
+    return conditions
+
+
+@app.get("/api/v1/commands", response_model=CommandPage)
+def list_commands(
+    q: str | None = Query(default=None, description="关键词；为空时按筛选条件分页浏览"),
+    category: str | None = None,
+    tag: str | None = None,
+    letter: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=40, ge=1, le=COMMAND_PAGE_SIZE_MAX),
+    db: Session = Depends(get_db),
+) -> CommandPage:
+    conditions = command_filters(category, tag, letter)
+
+    if q and q.strip():
+        hits, total = keyword_search(
+            db, q, limit=page_size, offset=(page - 1) * page_size, conditions=conditions
+        )
+        return CommandPage(
+            total=total, page=page, page_size=page_size, items=[command_list_item(h.command) for h in hits]
+        )
+
+    total = db.scalar(select(func.count()).select_from(Command).where(*conditions)) or 0
+    rows = db.scalars(
+        select(Command)
+        .where(*conditions)
+        .order_by(Command.name)
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+        .options(selectinload(Command.tags))
+    ).all()
+    return CommandPage(total=total, page=page, page_size=page_size, items=[command_list_item(r) for r in rows])
+
+
+@app.get("/api/v1/commands/facets", response_model=CommandFacets)
+def command_facets(db: Session = Depends(get_db)) -> CommandFacets:
+    total = db.scalar(select(func.count()).select_from(Command)) or 0
+
+    category_rows = dict(
+        db.execute(select(Command.category, func.count()).group_by(Command.category)).all()
+    )
+    ordered = [c for c in COMMAND_CATEGORY_ORDER if c in category_rows]
+    ordered += [c for c in category_rows if c not in COMMAND_CATEGORY_ORDER]
+    categories = [CommandCategoryCount(category=c, count=category_rows[c]) for c in ordered]
+
+    tag_rows = db.execute(
+        select(CommandTag.tag, func.count())
+        .group_by(CommandTag.tag)
+        .order_by(func.count().desc(), CommandTag.tag)
+    ).all()
+    tags = [CommandTagCount(tag=name, count=count) for name, count in tag_rows]
+
+    letters: dict[str, int] = {}
+    for name in db.scalars(select(Command.name)):
+        head = name[0].upper()
+        key = head if head.isascii() and head.isalpha() else "#"
+        letters[key] = letters.get(key, 0) + 1
+    letter_items = [
+        CommandLetterCount(letter=key, count=letters[key])
+        for key in ["#", *sorted(k for k in letters if k != "#")]
+    ]
+
+    return CommandFacets(total=total, categories=categories, tags=tags, letters=letter_items)
+
+
+@app.get("/api/v1/commands/natural", response_model=CommandSearchResult)
+def natural_search_commands(
+    q: str = Query(..., min_length=1, description="问题描述，如「查看某个端口被谁占用」"),
+    limit: int = Query(default=8, ge=1, le=30),
+    db: Session = Depends(get_db),
+) -> CommandSearchResult:
+    """自然语言检索。
+
+    词表从课程关卡声明派生（见 command_search.PhrasingIndex），因此结果天然带
+    「关联任务」入口 —— 命中哪个关卡就说明该命令出现在哪一课。
+    """
+    index = phrasing_index(db)
+    hits = index.search(q, limit=limit)
+
+    ordered_names: list[str] = []
+    quest_by_command: dict[str, list[RelatedQuest]] = {}
+    best: dict[str, tuple[float, str]] = {}
+
+    for hit in hits:
+        phrasing = hit.phrasing
+        related = RelatedQuest(
+            unit_id=phrasing.unit_id,
+            unit_order=phrasing.unit_order,
+            zone=phrasing.zone,
+            unit_title=phrasing.unit_title,
+            quest_id=phrasing.quest_id,
+            quest_order=phrasing.quest_order,
+            quest_title=phrasing.quest_title,
+            quest_kind=phrasing.quest_kind,
+        )
+        # hits 已按得分降序，因此每个命令第一次出现时对应的就是最相关的那个关卡。
+        snippet = f"{phrasing.unit_title} · {phrasing.quest_title}：{phrasing.scenario}"
+        for name in phrasing.commands:
+            if name not in ordered_names:
+                ordered_names.append(name)
+                best[name] = (hit.score, snippet)
+            quest_by_command.setdefault(name, []).append(related)
+
+    rows = (
+        {
+            row.name: row
+            for row in db.scalars(
+                select(Command)
+                .where(Command.name.in_(ordered_names))
+                .options(selectinload(Command.tags))
+            )
+        }
+        if ordered_names
+        else {}
+    )
+
+    results: list[CommandSearchHit] = []
+    for name in ordered_names:
+        row = rows.get(name)
+        if row is None:
+            continue
+        score, snippet = best[name]
+        results.append(
+            CommandSearchHit(
+                command=command_list_item(row),
+                score=score,
+                matched_field="quest",
+                snippet=snippet,
+                related_quests=quest_by_command.get(name, []),
+            )
+        )
+
+    # 兜底建议走关键词检索：课程只覆盖 21 个主题，像「怎么压缩目录」这类问题在课程里
+    # 没有对应关卡，自然语言匹配会给出勉强的结果。此时关键词命中的命令才是用户想要的
+    # （见 4.4.7「其余命令由关键词搜索兜底」）。整句问法不能直接 LIKE，故用 suggest_commands
+    # 拆成词元逐个检索再合并。
+    suggestions = [command.name for command in suggest_commands(db, q, limit=8)]
+
+    return CommandSearchResult(
+        mode="natural", query=q, total=len(results), hits=results, suggestions=suggestions
+    )
+
+
+@app.get("/api/v1/commands/{name}", response_model=CommandDetail)
+def get_command(name: str, db: Session = Depends(get_db)) -> CommandDetail:
+    row = db.scalar(
+        select(Command).where(Command.name == name.lower()).options(selectinload(Command.tags))
+    )
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="命令不存在")
+
+    return CommandDetail(
+        name=row.name,
+        summary=row.summary,
+        category=row.category,
+        tags=[tag.tag for tag in row.tags],
+        syntax=row.syntax,
+        sections=row.sections or [],
+        options=row.options,
+        examples=row.examples,
+        body_markdown=row.body_markdown,
+        source_url=row.source_url,
+        license=row.license,
+        source_version=row.source_version,
+        related_commands=related_commands_for(db, row),
+        related_quests=related_quests_map(db, {row.name}).get(row.name, []),
     )
