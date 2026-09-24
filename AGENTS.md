@@ -119,7 +119,7 @@ frontend/
   src/
     App.vue        # 全部界面 + 全部业务逻辑（单文件，约 470 行）
     main.ts        # createApp 挂载
-    styles.css     # 全局样式（深色终端风，压缩为超长行）
+    styles.css     # 全局样式（深色终端风）
     vite-env.d.ts
   index.html
   nginx.conf       # 生产：静态托管 + /api 反代到 backend:8000
@@ -128,6 +128,8 @@ frontend/
   eslint.config.js     # ESLint flat config（见 §5.6）
   .prettierrc.json     # Prettier 格式配置
   .prettierignore      # Prettier 忽略清单
+
+.gitattributes     # 固定 LF，避免 autocrlf 干扰 format:check
 ```
 
 **注意：`frontend/src/` 只有 4 个文件，没有组件拆分、没有 vue-router、没有 Pinia。** 仓库中显示的 1000+ 文件全部来自 `node_modules`。
@@ -316,6 +318,23 @@ npm run format:check  # Prettier 检查格式，不写入
 3. 不得为了让 lint 通过而降低规则等级或添加全局豁免 —— 应修正代码本身。
 4. 调整规则集或格式配置属于影响全仓库的改动，需在提交说明中写明理由。
 5. 变更工具链后必须同步更新本节、§2 与 §7。
+
+**已知限制（务必注意）**
+
+Prettier 会重排 Vue 模板中的内联事件处理器。若属性值包含**多条语句**：
+
+```html
+<!-- 危险：Prettier 会把它拆成多行，丢失语句分隔符 -->
+<button @click="authMode = 'register'; authError = ''">切换</button>
+```
+
+格式化后会变成两个没有分隔符的表达式，Vue 模板编译直接报 `Unexpected token`，**构建失败**。
+
+**因此：内联事件处理器只允许单条语句。** 需要多条语句时，抽成 `<script setup>` 中的方法：
+
+```html
+<button @click="switchAuthMode">切换</button>
+```
 
 **历史说明**
 
