@@ -6,20 +6,23 @@
 
 ### 前端
 
+> 前端**只使用 pnpm**，不使用 npm / yarn。首次使用请先启用 Corepack：`corepack enable`。
+> 误用 npm 会被 `preinstall` 钩子拦截。
+
 ```bash
 cd frontend
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 代码检查与格式化（提交前必须通过 `lint` 与 `build`）：
 
 ```bash
-npm run lint          # ESLint 检查
-npm run lint:fix      # ESLint 自动修复
-npm run format        # Prettier 格式化
-npm run format:check  # Prettier 检查格式
-npm run build         # vue-tsc 类型检查 + 生产构建
+pnpm run lint          # ESLint 检查
+pnpm run lint:fix      # ESLint 自动修复
+pnpm run format        # Prettier 格式化
+pnpm run format:check  # Prettier 检查格式
+pnpm run build         # vue-tsc 类型检查 + 生产构建
 ```
 
 ### 后端

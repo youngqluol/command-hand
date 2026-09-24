@@ -6,7 +6,7 @@
 
 ## 0. 铁律（优先级高于本文其他所有约定）
 
-以下三条规则适用于**每一次改动**，无例外。与其他章节冲突时，以本节为准。
+以下四条规则适用于**每一次改动**，无例外。与其他章节冲突时，以本节为准。
 
 ### 0.1 每次改动都必须记录到相应文件
 
@@ -38,11 +38,20 @@
 
 ### 0.3 前端必须集成 ESLint，代码规范、格式美观
 
-- 前端**必须**配置 ESLint，保证 `npm run lint` 可执行且**零错误**。
+- 前端**必须**配置 ESLint，保证 `pnpm run lint` 可执行且**零错误**。
 - 提交前必须通过 lint 与类型检查，不得提交带 lint 错误的代码。
 - 格式统一由工具决定，**不依赖人工审美**：缩进、引号、分号、行宽、尾随逗号、空行均按配置执行。
 - 新增前端代码不得引入新的 lint 错误。确需豁免某条规则时，必须使用**行内** `// eslint-disable-next-line` 并注明原因；**禁止整文件 `/* eslint-disable */`**。
 - 具体工具链、命令与规则集见 **第 5.6 节**。
+
+### 0.4 前端只允许使用 pnpm
+
+- 前端**只使用 pnpm** 管理依赖。**禁止**使用 npm、yarn、bun 安装或更新前端依赖。
+- **禁止**在 `frontend/` 下产生 `package-lock.json`、`yarn.lock`、`bun.lockb` 等非 pnpm 锁文件。发现即删除。
+- 唯一合法的锁文件是 `frontend/pnpm-lock.yaml`，且**必须提交**。
+- 已通过 `preinstall` 钩子（`npx only-allow pnpm`）强制拦截误用；**不得移除该钩子**。
+- 版本由 `package.json` 的 `packageManager` 字段锁定，通过 Corepack 生效；**修改它必须同时更新 Dockerfile 与本节**。
+- 具体命令、Docker 构建方式与常见问题见 **第 5.7 节**。
 
 ---
 
@@ -79,18 +88,22 @@ uvicorn app.main:app --reload --port 8000
 
 ### 前端（工作目录 `frontend/`）
 
+**只使用 pnpm**（见 §0.4）。首次使用先启用 Corepack：`corepack enable`。
+
 ```bash
-npm install
-npm run dev           # http://localhost:5173，/api 代理到 localhost:8000
-npm run build         # vue-tsc -b && vite build —— 类型检查 + 构建，提交前必过
-npm run preview
-npm run lint          # ESLint 检查，必须零错误（见 §0.3）
-npm run lint:fix      # ESLint 检查并自动修复
-npm run format        # Prettier 格式化全仓库
-npm run format:check  # Prettier 检查格式，不写入
+pnpm install
+pnpm run dev           # http://localhost:5173，/api 代理到 localhost:8000
+pnpm run build         # vue-tsc -b && vite build —— 类型检查 + 构建，提交前必过
+pnpm run preview
+pnpm run lint          # ESLint 检查，必须零错误（见 §0.3）
+pnpm run lint:fix      # ESLint 检查并自动修复
+pnpm run format        # Prettier 格式化全仓库
+pnpm run format:check  # Prettier 检查格式，不写入
 ```
 
-**提交前必须跑通 `npm run lint` 与 `npm run build`。** `build` 会先执行 `vue-tsc`，任何类型错误都会导致构建失败（历史上多次出现 `fix: 修复构建错误`）。
+**提交前必须跑通 `pnpm run lint` 与 `pnpm run build`。** `build` 会先执行 `vue-tsc`，任何类型错误都会导致构建失败（历史上多次出现 `fix: 修复构建错误`）。
+
+细节与常见问题见 §5.7。
 
 ### 全栈
 
@@ -123,11 +136,14 @@ frontend/
     vite-env.d.ts
   index.html
   nginx.conf       # 生产：静态托管 + /api 反代到 backend:8000
-  Dockerfile       # 多阶段：node 构建 → nginx 托管
+  Dockerfile       # 多阶段：corepack + pnpm 构建 → nginx 托管
+  .dockerignore    # 排除 node_modules / dist（pnpm 的 node_modules 含符号链接）
   vite.config.ts   # dev 代理 /api → localhost:8000
   eslint.config.js     # ESLint flat config（见 §5.6）
-  .prettierrc.json     # Prettier 格式配置
+  .prettierrc          # Prettier 格式配置
   .prettierignore      # Prettier 忽略清单
+  pnpm-lock.yaml       # 唯一合法锁文件，必须提交（见 §5.7）
+  pnpm-workspace.yaml  # pnpm 11 的配置载体：allowBuilds 等
 
 .gitattributes     # 固定 LF，避免 autocrlf 干扰 format:check
 ```
@@ -281,13 +297,13 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 
 不使用已废弃的 `.eslintrc.*`。`eslint-config-prettier` 必须位于配置数组**最后一项**，用于关闭与 Prettier 冲突的风格规则。
 
-**npm scripts**
+**脚本**（用 pnpm 执行，见 §5.7）
 
 ```bash
-npm run lint          # 检查，不自动修复
-npm run lint:fix      # 检查并自动修复
-npm run format        # Prettier 格式化全仓库
-npm run format:check  # Prettier 检查格式，不写入
+pnpm run lint          # 检查，不自动修复
+pnpm run lint:fix      # 检查并自动修复
+pnpm run format        # Prettier 格式化全仓库
+pnpm run format:check  # Prettier 检查格式，不写入
 ```
 
 **格式基线（由 `.prettierrc.json` 强制执行）**
@@ -313,7 +329,7 @@ npm run format:check  # Prettier 检查格式，不写入
 
 **要求**
 
-1. `npm run lint` 必须**零错误**；`npm run build` 必须同时通过类型检查（`vue-tsc`）与构建（`vite build`）。两者都不通过不得提交。
+1. `pnpm run lint` 必须**零错误**；`pnpm run build` 必须同时通过类型检查（`vue-tsc`）与构建（`vite build`）。两者都不通过不得提交。
 2. 新增代码不得引入新的 lint 错误。确需豁免时使用**行内** `// eslint-disable-next-line` 并注明原因；**禁止整文件 `/* eslint-disable */`**。
 3. 不得为了让 lint 通过而降低规则等级或添加全局豁免 —— 应修正代码本身。
 4. 调整规则集或格式配置属于影响全仓库的改动，需在提交说明中写明理由。
@@ -338,7 +354,59 @@ Prettier 会重排 Vue 模板中的内联事件处理器。若属性值包含**�
 
 **历史说明**
 
-存量代码已于接入时**全量格式化并单独提交**，未与功能改动混合。后续新增或修改文件请直接依赖 `npm run format`，不要手工调整格式。
+存量代码已于接入时**全量格式化并单独提交**，未与功能改动混合。后续新增或修改文件请直接依赖 `pnpm run format`，不要手工调整格式。
+
+### 5.7 包管理器（pnpm 唯一）
+
+**前端只使用 pnpm**（见 §0.4）。锁定版本见 `package.json` 的 `packageManager` 字段。
+
+**强制机制**
+
+| 机制 | 位置 | 作用 |
+| --- | --- | --- |
+| `packageManager` | `package.json` | 经 Corepack 锁定 pnpm 版本 |
+| `preinstall` | `package.json` | `npx only-allow pnpm`，拦截 npm / yarn / bun |
+| `engines` | `package.json` | 声明 node ≥ 20、pnpm ≥ 11 |
+
+`packageManager` 与 Dockerfile 中的 pnpm 版本**必须一致**，改一处要改另一处。
+
+**唯一合法锁文件**
+
+`frontend/pnpm-lock.yaml`，**必须提交**。以下文件一旦出现即为误用，应删除：
+
+- `package-lock.json`（npm）
+- `yarn.lock`（yarn）
+- `bun.lockb`（bun）
+
+`pnpm-lock.yaml` 已加入 `.prettierignore`，**不要对其运行格式化**。
+
+**pnpm-workspace.yaml**
+
+pnpm 11 把部分配置放在 `pnpm-workspace.yaml` 而非 `package.json`。当前包含：
+
+- `allowBuilds.esbuild: true` —— **必需**。pnpm 默认禁止依赖执行安装脚本；不放开 esbuild 的 postinstall，`vite build` 会失败。
+- `minimumReleaseAgeExclude` —— pnpm 自动写入的版本豁免清单，属工具自身记账，**不要手工清理**。
+
+**Docker 构建**
+
+```dockerfile
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+```
+
+- 必须 `COPY` 三个文件：`pnpm-workspace.yaml` 会影响安装行为，漏掉会导致 `allowBuilds` 不生效。
+- 必须用 `--frozen-lockfile`：CI / Docker 中锁文件与 `package.json` 不一致时应直接失败，而非静默重解析。
+- `corepack enable` 需要访问 pnpm 分发源，Dockerfile 中已设置 `COREPACK_NPM_REGISTRY` 指向国内镜像。
+
+**常见问题**
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `Use pnpm instead` | 误用 npm / yarn | 改用 `pnpm` |
+| `ERR_PNPM_IGNORED_BUILDS` | 依赖安装脚本被拦 | 在 `pnpm-workspace.yaml` 的 `allowBuilds` 中放行该依赖 |
+| 项目根出现 `_tmp_*` 文件 | pnpm 探测存储位置时的残留 | 已加入 `.gitignore`，确认无用后可删除 |
+| `ERR_PNPM_OUTDATED_LOCKFILE` | 锁文件与 `package.json` 不同步 | 本地执行 `pnpm install` 后提交锁文件 |
 
 ---
 
@@ -430,7 +498,7 @@ feat: gitignore
 - [ ] 新增区域或调整区域顺序 → `main.py` 的 `ZONE_ORDER` 与 `seed_data.py` 是否一致？
 - [ ] 调整了 XP / 等级 / 称号数值 → `main.py`、`schemas.py`、`App.vue` 的 `DEFAULT_LEVEL` 是否同步？
 - [ ] 新增接口 → 是否加了 `/api/v1` 前缀？是否需要 `Depends(get_current_user)`？是否已加入 `schemas.py` 的响应模型？
-- [ ] 前端改动 → `npm run build` 是否通过（含 `vue-tsc` 类型检查）？`npm run lint` 是否零错误？（见 §0.3）
+- [ ] 前端改动 → `pnpm run build` 是否通过（含 `vue-tsc` 类型检查）？`pnpm run lint` 是否零错误？（见 §0.3）
 - [ ] 本次改动涉及的文件，是否都已按 §12.1 同步更新了对应文档？（见 §0.1）
 - [ ] `AGENTS.md` 是否已按 §0.2 同步？若有缺口被补齐，§7 的条目是否已删除？
 - [ ] 新增依赖 → 是否写入了 `requirements.txt` 或 `package.json`？
@@ -446,6 +514,7 @@ feat: gitignore
 - ❌ 不要删除 `shellquest.db` 之外的任何用户数据，除非明确要求并已确认
 - ❌ 不要为「顺手优化」而重构 `App.vue` 的单文件结构或引入路由/状态库 —— 这属于架构决策，先问
 - ❌ 不要把 Redis 当作已接入的能力来使用，除非你真的完成了接入
+- ❌ 不要用 npm / yarn / bun 安装前端依赖，也不要提交非 pnpm 锁文件（见 §0.4、§5.7）
 
 ---
 
@@ -464,6 +533,7 @@ feat: gitignore
 | 数据结构（模型 / 表 / 字段） | `AGENTS.md` §4.4 + §6 |
 | 业务规则（XP、等级、解锁、打卡） | `AGENTS.md` §4.5 |
 | 前端工具链与代码质量配置 | `AGENTS.md` §5.6 + `README.md` |
+| 包管理器与锁文件策略 | `AGENTS.md` §5.7 + `README.md` |
 
 一次改动可能同时命中多行 —— **全部都要更新**。
 

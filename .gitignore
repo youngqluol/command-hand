@@ -9,3 +9,10 @@ __pycache__
 .env.development.local
 .env.test.local
 .env.production.local
+
+# 编辑器与 AI 助手工作数据，不属于项目代码
+.vscode/
+.workbuddy-ai/
+
+# pnpm 在项目目录下产生的临时探测文件
+_tmp_*
