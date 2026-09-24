@@ -12,6 +12,16 @@ npm install
 npm run dev
 ```
 
+代码检查与格式化（提交前必须通过 `lint` 与 `build`）：
+
+```bash
+npm run lint          # ESLint 检查
+npm run lint:fix      # ESLint 自动修复
+npm run format        # Prettier 格式化
+npm run format:check  # Prettier 检查格式
+npm run build         # vue-tsc 类型检查 + 生产构建
+```
+
 ### 后端
 
 ```bash

@@ -1,0 +1,19 @@
+# 统一换行符：仓库内与工作区均为 LF，避免 core.autocrlf=true 时
+# Prettier (endOfLine: "lf") 的 format:check 在 Windows 上误报。
+* text=auto eol=lf
+
+# 二进制文件不做换行符转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.db binary
+
+# Windows 专用脚本保持 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

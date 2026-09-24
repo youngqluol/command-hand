@@ -252,17 +252,15 @@ async function submitAuth() {
 }
 
 onMounted(async () => {
-  let serverQuests: Quest[] | null = null
   try {
     const response = await fetch(apiUrl('/api/v1/quests'))
     if (response.ok) {
       const apiQuests: Array<Omit<Quest, 'command' | 'status'> & { command_hint: string }> = await response.json()
-      serverQuests = apiQuests.map((quest) => ({
+      quests.value = apiQuests.map((quest) => ({
         ...quest,
         command: quest.command_hint,
         status: quest.id === 1 ? 'current' : 'locked',
       }))
-      quests.value = serverQuests
       apiUnavailable.value = false
     }
   } catch (err) {
@@ -309,7 +307,7 @@ onMounted(async () => {
         <strong>无法连接到后端 API</strong>
         <small>请检查：① backend 容器是否正常启动 ② nginx 是否可反代到 <code>backend:8000</code> ③ 服务器防火墙是否放行端口。当前 API 前缀：<code>{{ API_BASE || '/api (相对路径，由 nginx 反代)' }}</code></small>
       </div>
-      <button class="alert-close" @click="apiUnavailable = false" aria-label="关闭提示">×</button>
+      <button class="alert-close" aria-label="关闭提示" @click="apiUnavailable = false">×</button>
     </div>
     <header class="topbar">
       <button class="brand" aria-label="ShellQuest 首页" @click="selectTab('home')">
@@ -369,8 +367,8 @@ onMounted(async () => {
               v-for="(zone, idx) in (skillTree?.zones ?? [{ zone: '文件工坊', zone_index: 1 }])"
               :key="zone.zone"
               :class="['zone-chip', { active: activeSkillZone === idx }]"
-              @click="activeSkillZone = idx"
               :title="zone.zone"
+              @click="activeSkillZone = idx"
             >
               Z{{ String(zone.zone_index ?? idx + 1).padStart(2, '0') }}
             </button>
@@ -445,7 +443,7 @@ onMounted(async () => {
       <h1>描述问题，找到命令。</h1>
       <p>例如：查看 8080 端口被谁占用、统计日志中出现最多的 IP。</p>
       <label class="search-input"><span>⌕</span><input v-model="query" placeholder="输入命令或自然语言描述" /><kbd>Enter</kbd></label>
-      <div class="command-result" v-if="query"><div><span class="chip">网络 / 端口</span><h2><code>ss -ltnp</code></h2><p>查看正在监听的 TCP 端口及其关联进程。</p></div><button class="secondary">查看详情 →</button></div>
+      <div v-if="query" class="command-result"><div><span class="chip">网络 / 端口</span><h2><code>ss -ltnp</code></h2><p>查看正在监听的 TCP 端口及其关联进程。</p></div><button class="secondary">查看详情 →</button></div>
       <div v-else class="search-suggestions"><span>推荐尝试</span><button>查看端口占用</button><button>实时查看日志</button><button>磁盘空间不足</button></div>
     </section>
 
