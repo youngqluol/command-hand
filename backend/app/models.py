@@ -1,7 +1,18 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
 
@@ -18,17 +29,85 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class CourseUnit(Base):
+    """课程单元：21 天课程中的一天，是技能节点与解锁的基本单位。"""
+
+    __tablename__ = "course_units"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order: Mapped[int] = mapped_column(Integer, unique=True)
+    zone: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(String(128))
+    goal: Mapped[str] = mapped_column(String(256))
+    knowledge: Mapped[str] = mapped_column(Text)
+
+    quests: Mapped[list["Quest"]] = relationship(
+        back_populates="unit",
+        order_by="Quest.order",
+        cascade="all, delete-orphan",
+    )
+
+
 class Quest(Base):
+    """一道练习题。kind 决定交互形式，judge_type + judge_payload 决定判题。"""
+
     __tablename__ = "quests"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    zone: Mapped[str] = mapped_column(String(64))
+    unit_id: Mapped[int] = mapped_column(ForeignKey("course_units.id"), index=True)
     order: Mapped[int] = mapped_column(Integer, unique=True)
+    kind: Mapped[str] = mapped_column(String(16))
     title: Mapped[str] = mapped_column(String(128))
-    command_hint: Mapped[str] = mapped_column(String(128))
-    description: Mapped[str] = mapped_column(Text)
     scenario: Mapped[str] = mapped_column(Text)
-    answer_hint: Mapped[str] = mapped_column(String(256))
+    context: Mapped[str] = mapped_column(Text, default="")
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    answer_display: Mapped[str] = mapped_column(String(512))
+    explanation: Mapped[str] = mapped_column(Text)
+    pitfalls: Mapped[str] = mapped_column(Text, default="")
+    safer_alt: Mapped[str] = mapped_column(Text, default="")
+    judge_type: Mapped[str] = mapped_column(String(32))
+    judge_payload: Mapped[dict] = mapped_column(JSON)
+    difficulty: Mapped[int] = mapped_column(Integer, default=1)
+    xp_reward: Mapped[int] = mapped_column(Integer, default=40)
+
+    unit: Mapped[CourseUnit] = relationship(back_populates="quests")
+    options: Mapped[list["QuestOption"]] = relationship(
+        back_populates="quest",
+        order_by="QuestOption.key",
+        cascade="all, delete-orphan",
+    )
+    commands: Mapped[list["QuestCommand"]] = relationship(
+        back_populates="quest",
+        cascade="all, delete-orphan",
+    )
+
+
+class QuestOption(Base):
+    """choice / judge 题型的选项。"""
+
+    __tablename__ = "quest_options"
+    __table_args__ = (UniqueConstraint("quest_id", "key", name="uq_quest_option_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    quest_id: Mapped[int] = mapped_column(ForeignKey("quests.id"), index=True)
+    key: Mapped[str] = mapped_column(String(4))
+    text: Mapped[str] = mapped_column(Text)
+    is_correct: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    quest: Mapped[Quest] = relationship(back_populates="options")
+
+
+class QuestCommand(Base):
+    """题目与命令的关联，供命令查询模块双向跳转使用。"""
+
+    __tablename__ = "quest_commands"
+    __table_args__ = (UniqueConstraint("quest_id", "command_name", name="uq_quest_command"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    quest_id: Mapped[int] = mapped_column(ForeignKey("quests.id"), index=True)
+    command_name: Mapped[str] = mapped_column(String(64), index=True)
+
+    quest: Mapped[Quest] = relationship(back_populates="commands")
 
 
 class QuestCompletion(Base):
@@ -62,14 +141,19 @@ class CheckIn(Base):
 
 
 class SkillProgress(Base):
+    """技能节点点亮记录，绑定课程单元。
+
+    node_index 是单元在其所属区域内的下标（对齐 COURSE_DESIGN.md 的主题地图）。
+    """
+
     __tablename__ = "skill_progress"
     __table_args__ = (
-        UniqueConstraint("user_id", "zone", "node_index", name="uq_user_skill_zone_node"),
+        UniqueConstraint("user_id", "unit_id", name="uq_user_skill_unit"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    unit_id: Mapped[int] = mapped_column(ForeignKey("course_units.id"), index=True)
     zone: Mapped[str] = mapped_column(String(64), index=True)
     node_index: Mapped[int] = mapped_column(Integer)
-    quest_id: Mapped[int] = mapped_column(ForeignKey("quests.id"))
     unlocked_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

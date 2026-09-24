@@ -1,3 +1,5 @@
+"""Pydantic 出入参模型。字段与 REQUIREMENTS.md §4.1.2 的数据模型保持一致。"""
+
 from datetime import datetime
 from typing import Literal
 
@@ -32,6 +34,14 @@ def compute_level_progress(xp: int) -> tuple[int, int]:
 
 
 QuestStatus = Literal["done", "current", "locked"]
+UnitStatus = Literal["done", "current", "locked"]
+QuestKind = Literal["terminal", "fill", "choice", "judge"]
+JudgeType = Literal["contains_all", "contains_any", "regex", "equals", "option"]
+
+
+# --------------------------------------------------------------------------- #
+# 认证与用户
+# --------------------------------------------------------------------------- #
 
 
 class RegisterRequest(BaseModel):
@@ -74,43 +84,89 @@ class AuthResponse(BaseModel):
     user: UserSummary
 
 
-class CompletionResponse(BaseModel):
+# --------------------------------------------------------------------------- #
+# 课程内容
+# --------------------------------------------------------------------------- #
+
+
+class QuestOptionPublic(BaseModel):
+    """选项只暴露 key 与文本，正确答案由提交接口返回。"""
+
+    key: str
+    text: str
+
+
+class QuestPublic(BaseModel):
+    id: int
+    order: int
+    unit_id: int
+    unit_order: int
+    zone: str
+    kind: QuestKind
+    title: str
+    scenario: str
+    context: str
+    prompt: str
+    difficulty: int
+    xp_reward: int
+    options: list[QuestOptionPublic] = []
+    commands: list[str] = []
+    status: QuestStatus | None = None
+
+
+class UnitSummary(BaseModel):
+    id: int
+    order: int
+    zone: str
+    title: str
+    goal: str
+    knowledge: str
+    quest_count: int
+    completed_quests: int
+    xp_total: int
+    status: UnitStatus | None = None
+    quests: list[QuestPublic] = []
+
+
+# --------------------------------------------------------------------------- #
+# 作答与进度
+# --------------------------------------------------------------------------- #
+
+
+class SubmitRequest(BaseModel):
+    """terminal / fill 题提交 answer；choice / judge 题提交 option_keys。"""
+
+    answer: str | None = Field(default=None, max_length=2000)
+    option_keys: list[str] | None = None
+
+
+class SubmitResponse(BaseModel):
+    correct: bool
     already_completed: bool
     xp_awarded: int
+    unit_completed: bool
+    expected_display: str
+    correct_keys: list[str] = []
+    explanation: str
+    pitfalls: str
+    safer_alt: str
     user: UserSummary
-
-
-class QuestSummary(BaseModel):
-    id: int
-    zone: str
-    order: int
-    title: str
-    command_hint: str
-    description: str
-
-    model_config = {"from_attributes": True}
-
-
-class QuestStatusItem(BaseModel):
-    id: int
-    order: int
-    zone: str
-    title: str
-    command_hint: str
-    description: str
-    scenario: str
-    answer_hint: str
-    status: QuestStatus
-    xp_reward: int = 120
 
 
 class UserProgress(BaseModel):
     user: UserSummary
+    total_units: int
+    completed_units: int
     total_quests: int
     completed_quests: int
     completion_percent: float
-    current_quest_id: int | None
-    quests: list[QuestStatusItem]
+    current_unit_id: int | None
+    units: list[UnitSummary]
+
+
+# --------------------------------------------------------------------------- #
+# 打卡
+# --------------------------------------------------------------------------- #
 
 
 class CheckInStatus(BaseModel):
@@ -127,11 +183,15 @@ class CheckInResponse(BaseModel):
     user: UserSummary
 
 
+# --------------------------------------------------------------------------- #
+# 技能树
+# --------------------------------------------------------------------------- #
+
+
 class SkillNode(BaseModel):
-    zone: str
+    unit_id: int
     index: int
     title: str
-    quest_id: int
     unlocked: bool
     unlocked_at: str | None
 
