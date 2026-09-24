@@ -35,6 +35,16 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
+课程内容位于 `backend/app/curriculum/`（21 个单元 / 63 道题），启动时会自动自检并幂等同步到数据库。
+改完课程内容后可以先单独跑自检：
+
+```bash
+.venv/Scripts/python -c "from app.main import validate_curriculum; validate_curriculum()"
+```
+
+> 若数据库是旧版本（`quests` 表结构不同），首次启动会因表结构不匹配而报错，
+> 需要先删除 `backend/shellquest.db` 再启动。详见 `AGENTS.md` §6。
+
 访问 `http://localhost:5173`，API 文档位于 `http://localhost:8000/docs`。
 
 ## Docker 部署

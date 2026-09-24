@@ -27,6 +27,7 @@
 | 目录结构、文件职责变化 | §3 |
 | 新增 / 删除 / 修改接口 | §4、§2 |
 | 新增 / 修改数据模型、表、字段 | §4.4、§6 |
+| 新增 / 修改课程单元、题目、题型、判题规则 | §4.4、§4.5、§4.7、`COURSE_DESIGN.md` |
 | 业务规则调整（XP、等级、称号、解锁、打卡） | §4.5 |
 | 前端工具链、目录约定、样式约定变化 | §5 |
 | 依赖、启动方式、端口变化 | §2 |
@@ -86,6 +87,15 @@ uvicorn app.main:app --reload --port 8000
 - 健康检查：http://localhost:8000/health
 - 依赖变更请同时更新 `requirements.txt`；`requirements-dev.txt` 通过 `-r requirements.txt` 继承，只放开发期依赖（目前仅 `httpx`）。
 
+改完 `curriculum/` 下的课程内容后，**先跑自检再启动服务**（自检失败时服务根本起不来，提前跑能看清报错）：
+
+```bash
+.venv/Scripts/python -c "from app.main import validate_curriculum; validate_curriculum()"
+```
+
+自检覆盖：`order` 连续性、区域名合法性、题型/判题器合法性、`judge_payload` 结构、
+选择题选项与 `correct_keys` 的一致性、每题是否关联了命令。详见 §4.7。
+
 ### 前端（工作目录 `frontend/`）
 
 **只使用 pnpm**（见 §0.4）。首次使用先启用 Corepack：`corepack enable`。
@@ -118,12 +128,19 @@ docker compose up --build     # 前端 :8080，后端 :8000，MySQL :3306，Redi
 ```
 backend/
   app/
-    main.py        # 全部 HTTP 路由 + 关卡解锁算法 + 打卡逻辑（单文件，约 450 行）
-    models.py      # SQLAlchemy 模型，6 张表
+    main.py        # 全部 HTTP 路由 + 判题引擎 + 课程落库 + 解锁算法 + 打卡逻辑
+    models.py      # SQLAlchemy 模型，9 张表
     schemas.py     # Pydantic 请求/响应模型 + 等级、称号、经验进度计算
     database.py    # engine / SessionLocal / Base
     security.py    # scrypt 口令哈希与校验
-    seed_data.py   # 21 条任务种子（QUEST_SEEDS）
+    curriculum/    # 课程内容：21 个单元 / 63 道题，按主题区域分 6 个模块
+      __init__.py      # 汇总 6 个区域模块为 UNITS，顺序必须与 ZONE_ORDER 一致
+      zone_file.py     # 文件工坊     单元 01–04
+      zone_system.py   # 系统哨站     单元 05–09
+      zone_network.py  # 网络前线     单元 10–12
+      zone_shell.py    # Shell 作战室 单元 13–16
+      zone_container.py# 容器基地     单元 17–19
+      zone_incident.py # 故障指挥中心 单元 20–21
   requirements.txt
   requirements-dev.txt
   shellquest.db    # 本地 SQLite（gitignore，勿提交）
@@ -188,61 +205,140 @@ X-Session-Token: <token>
 
 ### 4.4 数据模型（`models.py`）
 
+三层结构：**课程单元 → 题目 → 选项**。`CourseUnit` 是技能节点与解锁的基本单位，`Quest` 是单元下的一道题。
+字段语义与题型定义见 `REQUIREMENTS.md` §4.1.2。
+
 | 表 | 说明 | 关键约束 |
 | --- | --- | --- |
 | `users` | 用户 + `xp` / `streak_days` / `last_checkin_date` | `username` 唯一 |
-| `quests` | 21 个关卡 | `order` 唯一（1..21） |
+| `course_units` | 课程单元（21 个），含 `zone` / `title` / `goal` / `knowledge` | `order` 唯一（1..21） |
+| `quests` | 题目（63 道），含题型、场景、判题规则 | `order` 唯一（1..63），`unit_id` 外键 |
+| `quest_options` | `choice` / `judge` 题型的选项 | `(quest_id, key)` 唯一 |
+| `quest_commands` | 题目 ↔ 命令名的关联，供命令查询双向跳转 | `(quest_id, command_name)` 唯一 |
 | `quest_completions` | 完成记录 | `(user_id, quest_id)` 唯一 |
 | `user_sessions` | 登录会话 | `token` 唯一 |
 | `check_ins` | 每日打卡 | `(user_id, checkin_date)` 唯一 |
-| `skill_progress` | 技能节点点亮 | `(user_id, zone, node_index)` 唯一 |
+| `skill_progress` | 技能节点点亮，**绑定课程单元** | `(user_id, unit_id)` 唯一 |
+
+`quests.judge_payload` 是 `JSON` 列，其结构由 `judge_type` 决定：
+
+| `judge_type` | `judge_payload` 结构 |
+| --- | --- |
+| `contains_all` / `contains_any` | `{"terms": ["...", "..."]}` |
+| `equals` | `{"value": "..."}` |
+| `regex` | `{"pattern": "..."}` |
+| `option` | `{"correct_keys": ["A"]}` |
+
+⚠️ **JSON 列不跟踪原地修改。** 更新 `judge_payload` 必须整体赋新 dict（`quest.judge_payload = {...}`），
+写 `quest.judge_payload["terms"] = [...]` 不会落库。
 
 ### 4.5 关键业务规则（改动前务必理解）
 
-**关卡解锁** — `compute_quest_statuses()`：
+**单元解锁** — `compute_unit_statuses()`：
 
-- 按 `Quest.order` 升序线性推进。
-- 解锁一关需满足：① 上一 `order` 已完成；② 若该关是所属区域的**第一关**，则上一区域必须**全部完成**。
-- 全局同一时刻**只有一个** `status == "current"`，其余为 `locked` 或 `done`。
+- 按 `CourseUnit.order` 升序**严格串行**推进：单元 N 解锁 ⟺ 单元 1..N-1 全部完成。
+- 全部题目完成 → `done`；第一个未完成的单元 → `current`；其余 → `locked`。
+- 全局同一时刻**只有一个** `status == "current"` 的单元。
 - 状态枚举：`Literal["done", "current", "locked"]`（定义在 `schemas.py`）。
+
+**题目状态** — `compute_quest_statuses()`：
+
+- 已完成的题 → `done`（即使它所在单元已不是 `current`，历史完成记录依然显示为已完成）。
+- 当前单元内未完成的题 → `current`（**同一单元内的题可以任意顺序作答**）。
+- 锁定单元内的题 → `locked`。
+- `POST /api/v1/quests/{id}/submit` 会再次校验，对 `locked` 单元返回 403「该课程单元尚未解锁」。
+
+**判题引擎** — `judge_answer()`，支持 5 种判题器：
+
+| `judge_type` | 规则 |
+| --- | --- |
+| `contains_all` | 归一化后，所有 `terms` 都必须出现 |
+| `contains_any` | 归一化后，任一 `terms` 出现即可 |
+| `regex` | 归一化后，`re.search(pattern, text, re.IGNORECASE)` 命中 |
+| `equals` | 归一化后完全相等 |
+| `option` | 提交的 `option_keys` 集合与 `correct_keys` **完全一致**（大小写不敏感） |
+
+`normalize_answer()` 的归一化步骤（用户输入与标准答案走同一套）：去首尾空白 → 去常见提示符前缀
+（`$` / `#` / `>` / `PS...>`）→ 统一弯引号与反引号为半角 → 折叠连续空白 → 转小写。
+**这就是为什么 `$ whoami && pwd` 与 `whoami && pwd` 判为同一个答案。**
+
+⚠️ **`contains_all` 不是「包含答案字符串」，而是「包含若干关键词」。** 关键词之间是 AND 关系，
+但**不校验顺序、不校验参数个数**。例如 `terms: ["find", ".env"]` 会接受 `find /x -name .env`，
+也会接受 `echo find .env`。这是刻意的取舍（见 `REQUIREMENTS.md` §4.1.2「判题边界」），
+需要严格匹配时改用 `regex` 或 `equals`。
 
 **经验值**
 
 | 行为 | XP | 定义位置 |
 | --- | --- | --- |
-| 完成任务 | 120 | `main.py` 中硬编码 `user.xp += 120`；`schemas.py` 中 `xp_reward: int = 120` |
+| 完成一道题 | `quest.xp_reward`（20 / 40 两档，随难度） | 逐题声明在 `curriculum/` 中 |
+| 完成整个单元 | 60 | `main.py` 的 `UNIT_COMPLETION_BONUS` |
 | 每日打卡 | 30 | `main.py` 的 `DAILY_CHECKIN_XP` |
 | 升级阈值 | 1000 | `schemas.py` 的 `XP_PER_LEVEL` |
 
-重复完成同一任务**不重复给经验**，返回 `already_completed=true, xp_awarded=0`。
-完成任务时会**顺带自动打卡**（若当日未打卡）。
+重复提交同一道题**不重复给经验**，返回 `already_completed=true, xp_awarded=0`（但依然返回答案与解析）。
+首次答对时会**顺带自动打卡**（若当日未打卡）。
 
 **等级与称号** — `schemas.py`：`level = xp // 1000 + 1`，称号 4 档：初级探索者(1-3) / 中级执令者(4-6) / 高级指挥官(7-9) / 传奇 ShellMaster(10+)。等级相关字段通过 Pydantic `@computed_field` 计算，**不在数据库中存储**。
 
-**技能树** — `build_skill_tree()`：按 `ZONE_ORDER` 的 6 个区域聚合，每个区域内的节点索引 = 该区域任务按 `order` 排序后的下标。
+**技能树** — `build_skill_tree()`：按 `ZONE_ORDER` 的 6 个区域聚合，每个区域内的节点索引 = 该区域内单元按 `order` 排序后的下标。节点在**单元全部完成**时点亮（`grant_skill_if_unit_done()`）。
+`ZONE_ORDER` 之外的区域会被追加到末尾而非丢弃。
 
-### 4.6 区域常量必须同步
+### 4.6 区域常量必须三处同步
 
 ```python
 # main.py
 ZONE_ORDER = ["文件工坊", "系统哨站", "网络前线", "Shell 作战室", "容器基地", "故障指挥中心"]
 ```
 
-这 6 个字符串**必须与 `seed_data.py` 中 `QUEST_SEEDS` 使用的 `zone` 字面量完全一致**（含全角/半角空格）。`ZONE_ORDER` 中遗漏的区域会在技能树中**静默消失**，不报错。
+这 6 个字符串**必须与 `curriculum/` 中每个单元声明的 `zone` 字面量完全一致**（含全角/半角空格），
+且 `curriculum/__init__.py` 的模块拼接顺序必须与 `ZONE_ORDER` 一致。
 
-### 4.7 种子数据
+`validate_curriculum()` 会在启动时校验「单元的 `zone` 是否属于 `ZONE_ORDER`」并**直接抛错**，
+因此**拼错区域名不会再静默消失**，而是服务启动失败。但**区域之间的相对顺序**无法自动校验，
+调整顺序时仍需人工确认 `ZONE_ORDER` 与 `__init__.py` 同步。
 
-`seed_quests()` 在应用启动时（`lifespan`）执行：
+### 4.7 课程内容与落库
 
-- 只插入 `order` 尚不存在的记录。
-- **不会更新已存在记录的字段。**
-- 因此**修改 `seed_data.py` 对已初始化的数据库不生效**。本地验证请删除 `backend/shellquest.db` 后重启，或在容器中重建 MySQL 卷。
+课程内容全部在 `app/curriculum/`，**`main.py` 与任何其他文件都不硬编码题目**。
 
-`QUEST_SEEDS` 是六元组列表，`order` 由 `enumerate(..., start=1)` 自动生成：
+启动流程（`lifespan`）：
+
+1. `validate_curriculum()` —— 自检数据。任何一处不合法就 `RuntimeError`，**服务起不来**。
+2. `Base.metadata.create_all()` —— 只建缺失的表。
+3. `seed_curriculum()` —— 以 `order` 为稳定键做**幂等 UPSERT**。
+
+**`seed_curriculum()` 的行为（与旧的 `seed_quests()` 完全不同，务必注意）**
+
+- 内容没变 → **完全不写库**（逐字段比对，包括选项与命令关联），启动是无副作用的。
+- 内容变了 → 只更新变化的那道题的标量字段，并**重建它的选项与命令关联**。
+- **用户进度不会丢**：`quest_completions` / `skill_progress` 按 `id` 关联，而 `id` 由 `order` 稳定推导，不随内容更新变化。
+
+因此**修改 `curriculum/` 下的内容后，重启服务即可生效**，不再需要删库。
+只有在**增删单元或题目导致 `order` 整体位移**时才需要重建数据库（历史完成记录会错位）。
+
+单元种子结构（每个区域模块导出一个 `UNITS` 列表）：
 
 ```python
-(zone, title, command_hint, description, scenario, answer_hint)
+{
+    "order": 1, "zone": "文件工坊", "title": "...", "goal": "...", "knowledge": "...(Markdown)",
+    "quests": [
+        {
+            "kind": "terminal",              # terminal | fill | choice | judge
+            "title": "...", "scenario": "...", "context": "```text ... ```", "prompt": "...",
+            "answer_display": "...",         # 仅用于提交后展示，列表接口不下发
+            "judge_type": "contains_all", "judge_payload": {"terms": [...]},
+            "explanation": "...", "pitfalls": "...", "safer_alt": "...",
+            "difficulty": 1, "xp_reward": 40,
+            "commands": ["whoami", "pwd"],   # 必须非空，否则校验失败
+            "options": [],                   # choice / judge 题型才非空
+        },
+    ],
+}
 ```
+
+**题目的 `order` 由列表位置自动推导（全局连续 1..63），种子数据里不写 `order`。**
+在列表中间插入题目会导致其后所有题目的 `order` 位移，进而使历史完成记录错位 —— 优先追加到末尾。
 
 ---
 
@@ -424,6 +520,14 @@ RUN pnpm install --frozen-lockfile
 
 引入 Alembic 属于架构级变更，**请先与维护者确认**。
 
+**表结构 vs 表内容，两者的更新机制不同，不要混淆：**
+
+| 改了什么 | 需要做什么 |
+| --- | --- |
+| `models.py` 的**表/列定义** | 必须重建数据库（见上） |
+| `curriculum/` 的**题目内容** | 重启即可，`seed_curriculum()` 会幂等同步（见 §4.7） |
+| `curriculum/` 中**增删单元/题目**（`order` 位移） | 必须重建数据库，否则历史完成记录错位 |
+
 ---
 
 ## 7. 已知缺口（不要误以为已实现）
@@ -433,17 +537,22 @@ RUN pnpm install --frozen-lockfile
 | 需求 | 现状 |
 | --- | --- |
 | 4.4 命令速查 + 自然语言搜索 | 后端无接口；前端搜索页是**硬编码**，任何输入都只显示 `ss -ltnp` 一张卡片 |
-| 4.1 自由闯关主题地图 | 无地图视图，`quests` 页只是把 21 关拉平成列表 |
+| 4.1 自由闯关主题地图 | 无地图视图。**数据结构已就绪**（`/api/v1/units` 返回按 `zone` 分组的单元 + 状态），但前端尚无地图页面 |
 | 4.3 成就 / 徽章 / 公开排行榜 | 前后端均无实现 |
-| 4.2 多种练习题型 | 仅有「模拟终端」一种，判题为 `input.includes('find') && input.includes('.env')` 的字符串匹配 |
-| 4.1.1 场景化出题 | `Quest` 表只有 5 个文本字段，**无题型/选项/判题规则字段**，撑不起真正的场景题；任务详情页的场景描述与终端提示**全部写死在 `App.vue` 模板中**，21 关点进去内容相同 |
+| 4.4.10 题目 ↔ 命令双向跳转 | **数据已就绪**（`quest_commands` 表 + 每题 `commands` 字段），但命令查询模块尚未实现，跳转链路未打通 |
+
+已补齐、从本表移除的条目：
+
+- ~~4.1.1 场景化出题~~ —— 已由 `CourseUnit` / `Quest` / `QuestOption` 三层模型 + `curriculum/` 承载
+- ~~4.2 多种练习题型~~ —— 已支持 `terminal` / `fill` / `choice` / `judge` 四种题型与 5 种判题器
 
 其他待改进项：
 
 - `login` 复用了 `RegisterRequest`（语义上应拆出 `LoginRequest`）
 - `redis` 已在 compose 中启动但代码零引用；需求中的排行榜/会话若落地，应优先接入 Redis
-- `complete_quest()` 中 `db.commit()` 被多次调用（`do_checkin` 内一次 + 函数末尾一次），逻辑可合并
-- 等级/经验常量在 `main.py` 与 `schemas.py` 之间存在重复定义，修改时需两处同步
+- `submit_quest()` 中 `db.commit()` 被多次调用（`do_checkin` 内一次 + 函数末尾一次），逻辑可合并
+- `main.py` 仍是单文件承载全部路由；接口数量增长后需要评估是否拆分 `APIRouter`
+- `curriculum/` 的题目内容目前为**手工撰写**，尚未与上游命令库做交叉校验（命令名可能写错）
 
 ---
 
@@ -493,11 +602,12 @@ feat: gitignore
 
 改动前后自查：
 
-- [ ] 修改了 `models.py` 的结构 → 是否处理了已有数据库？是否更新了本文档第 4.4 节？
-- [ ] 修改了 `seed_data.py` → 是否意识到对已初始化库不生效？是否同步了 `ZONE_ORDER`？
-- [ ] 新增区域或调整区域顺序 → `main.py` 的 `ZONE_ORDER` 与 `seed_data.py` 是否一致？
+- [ ] 修改了 `models.py` 的结构 → 是否处理了已有数据库（`create_all` 不会改列）？是否更新了本文档第 4.4 节？
+- [ ] 修改了 `curriculum/` 的题目内容 → 是否跑过启动自检（`validate_curriculum`）？内容改动无需删库，增删题目则需删库（见 §4.7、§6）
+- [ ] 新增或调整区域 → `main.py` 的 `ZONE_ORDER`、`curriculum/__init__.py` 的拼接顺序、各单元的 `zone` 字面量是否三处一致？
 - [ ] 调整了 XP / 等级 / 称号数值 → `main.py`、`schemas.py`、`App.vue` 的 `DEFAULT_LEVEL` 是否同步？
 - [ ] 新增接口 → 是否加了 `/api/v1` 前缀？是否需要 `Depends(get_current_user)`？是否已加入 `schemas.py` 的响应模型？
+- [ ] 新增接口 → 是否**泄露了答案**（`answer_display` / `judge_payload` / `is_correct`）？答案只允许在提交接口返回
 - [ ] 前端改动 → `pnpm run build` 是否通过（含 `vue-tsc` 类型检查）？`pnpm run lint` 是否零错误？（见 §0.3）
 - [ ] 本次改动涉及的文件，是否都已按 §12.1 同步更新了对应文档？（见 §0.1）
 - [ ] `AGENTS.md` 是否已按 §0.2 同步？若有缺口被补齐，§7 的条目是否已删除？
@@ -515,6 +625,9 @@ feat: gitignore
 - ❌ 不要为「顺手优化」而重构 `App.vue` 的单文件结构或引入路由/状态库 —— 这属于架构决策，先问
 - ❌ 不要把 Redis 当作已接入的能力来使用，除非你真的完成了接入
 - ❌ 不要用 npm / yarn / bun 安装前端依赖，也不要提交非 pnpm 锁文件（见 §0.4、§5.7）
+- ❌ 不要在课程列表 / 题目详情接口中下发答案字段（`answer_display` / `judge_payload` / 选项的 `is_correct`）。
+  答案只允许由 `POST /api/v1/quests/{id}/submit` 返回，否则前端可直接读到答案
+- ❌ 不要在 `main.py` 或其他后端文件中硬编码题目内容 —— 课程内容一律放 `curriculum/`（见 §4.7）
 
 ---
 
@@ -531,6 +644,7 @@ feat: gitignore
 | 课程单元、主题区域、题型配比 | `COURSE_DESIGN.md` |
 | 目录结构、架构、约定、命令、已知缺口 | `AGENTS.md`（本文件） |
 | 数据结构（模型 / 表 / 字段） | `AGENTS.md` §4.4 + §6 |
+| 课程内容（题目、选项、判题规则、命令关联） | `AGENTS.md` §4.4 + §4.7 + `COURSE_DESIGN.md` |
 | 业务规则（XP、等级、解锁、打卡） | `AGENTS.md` §4.5 |
 | 前端工具链与代码质量配置 | `AGENTS.md` §5.6 + `README.md` |
 | 包管理器与锁文件策略 | `AGENTS.md` §5.7 + `README.md` |
