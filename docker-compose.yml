@@ -41,8 +41,11 @@ services:
       MYSQL_USER: ${MYSQL_USER:-shellquest}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-root-password}
+    # 只绑回环地址：后端走 Docker 内网 DNS（mysql:3306）访问，宿主机端口映射对应用并非必需。
+    # 绑 0.0.0.0 时公网可直连，是常见的挖矿/勒索入口（Redis 尤其危险，默认无认证）。
+    # 需要从本机连库调试时，先 SSH 到服务器再用 127.0.0.1 连。
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -53,8 +56,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    # 同上：不对外暴露。Redis 默认无认证，暴露到公网几乎必然被扫。
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
 
