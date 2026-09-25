@@ -15,6 +15,10 @@ pnpm install
 pnpm run dev
 ```
 
+前端结构：`src/views/`（一屏一个文件，对应一条路由）、`src/components/`（可复用块）、
+`src/stores/`（模块级 `ref` 单例，无 Pinia）、`src/api/client.ts`（唯一的 fetch 封装）。
+路由用 history 模式，新增页面需在 `src/router/index.ts` 注册。详见 `AGENTS.md` §5。
+
 代码检查与格式化（提交前必须通过 `lint` 与 `build`）：
 
 ```bash

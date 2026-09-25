@@ -1,0 +1,160 @@
+/**
+ * 会话与用户数据。模块级 `ref` 单例，不引 Pinia（AGENTS.md §5.3）。
+ *
+ * 所有写操作都吞掉异常并降级，界面永远不白屏（AGENTS.md §5.4）：
+ * - 网络不可达 → `apiUnavailable = true`，顶部显示告警条
+ * - 业务错误（如 401）→ 清掉本地 token，回到未登录态
+ */
+
+import { computed, ref } from 'vue'
+
+import { ApiError, getToken, isNetworkError, request, setToken } from '../api/client'
+import type { AuthResponse, CheckInResponse, CheckInStatus, SkillTree, UserProgress, UserSummary } from '../types'
+
+/** 未登录 / 后端不可用时的占位用户。等级常量与后端 `schemas.py` 保持一致。 */
+export const DEFAULT_USER: UserSummary = {
+  id: 0,
+  username: 'guest',
+  xp: 0,
+  streak_days: 0,
+  created_at: '',
+  level: 1,
+  level_title: '初级探索者',
+  level_xp_earned: 0,
+  level_xp_total: 1000,
+}
+
+const user = ref<UserSummary | null>(null)
+const checkin = ref<CheckInStatus | null>(null)
+const skills = ref<SkillTree | null>(null)
+const progress = ref<UserProgress | null>(null)
+const apiUnavailable = ref(false)
+const restoring = ref(true)
+
+export const currentUser = computed(() => user.value)
+export const displayUser = computed(() => user.value ?? DEFAULT_USER)
+export const checkinStatus = computed(() => checkin.value)
+export const skillTree = computed(() => skills.value)
+export const userProgress = computed(() => progress.value)
+export const apiUnavailableState = computed(() => apiUnavailable.value)
+export const isRestoring = computed(() => restoring.value)
+export const isLoggedIn = computed(() => user.value !== null)
+
+export function setUser(next: UserSummary | null): void {
+  user.value = next
+  if (next) apiUnavailable.value = false
+}
+
+function reportError(scope: string, error: unknown): void {
+  console.warn(`[ShellQuest] ${scope}失败:`, error)
+  if (isNetworkError(error)) apiUnavailable.value = true
+}
+
+/** 登录后（或恢复会话后）一次性拉齐打卡状态、技能树与进度。 */
+async function loadUserData(): Promise<void> {
+  await Promise.all([refreshCheckin(), refreshSkills(), refreshProgress()])
+}
+
+export async function refreshProgress(): Promise<void> {
+  if (!user.value) return
+  try {
+    progress.value = await request<UserProgress>('/api/v1/user/progress')
+  } catch (error) {
+    reportError('加载进度', error)
+  }
+}
+
+export async function refreshCheckin(): Promise<void> {
+  if (!user.value) return
+  try {
+    checkin.value = await request<CheckInStatus>('/api/v1/checkin/status')
+  } catch (error) {
+    reportError('加载打卡状态', error)
+  }
+}
+
+export async function refreshSkills(): Promise<void> {
+  if (!user.value) return
+  try {
+    skills.value = await request<SkillTree>('/api/v1/user/skills')
+  } catch (error) {
+    reportError('加载技能树', error)
+  }
+}
+
+/**
+ * 应用启动时恢复登录态。token 存在但已失效（401）时静默清掉，不打扰用户。
+ */
+export async function restoreSession(): Promise<void> {
+  // 没有 token 就别去问 /auth/me —— 那必然是一个 401，会在控制台留下无意义的报错。
+  if (!getToken()) {
+    restoring.value = false
+    return
+  }
+
+  restoring.value = true
+  try {
+    const me = await request<UserSummary>('/api/v1/auth/me')
+    setUser(me)
+    await loadUserData()
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      setToken('')
+      setUser(null)
+    } else {
+      reportError('恢复登录状态', error)
+    }
+  } finally {
+    restoring.value = false
+  }
+}
+
+/**
+ * 登录 / 注册。失败时**向上抛出**，由弹窗展示具体原因（用户名占用、密码错误等）。
+ */
+export async function authenticate(
+  mode: 'login' | 'register',
+  credentials: { username: string; password: string },
+): Promise<void> {
+  const payload = await request<AuthResponse>(`/api/v1/auth/${mode}`, {
+    method: 'POST',
+    body: credentials,
+  })
+  setToken(payload.token)
+  setUser(payload.user)
+  await loadUserData()
+}
+
+export function signOut(): void {
+  setToken('')
+  setUser(null)
+  checkin.value = null
+  skills.value = null
+  progress.value = null
+}
+
+export async function checkIn(): Promise<CheckInResponse | null> {
+  if (!user.value) return null
+  try {
+    const payload = await request<CheckInResponse>('/api/v1/checkin', { method: 'POST' })
+    checkin.value = payload.status
+    setUser(payload.user)
+    return payload
+  } catch (error) {
+    reportError('打卡', error)
+    return null
+  }
+}
+
+export function dismissApiAlert(): void {
+  apiUnavailable.value = false
+}
+
+/**
+ * 作答成功后同步本地用户与进度。作答接口已经返回了最新的 `user`，
+ * 这里只补一次进度（单元状态、完成数会变）。
+ */
+export async function applySubmitResult(nextUser: UserSummary): Promise<void> {
+  setUser(nextUser)
+  await refreshProgress()
+}

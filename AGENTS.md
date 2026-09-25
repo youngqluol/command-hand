@@ -62,7 +62,7 @@
 **ShellQuest** — 面向全栈开发者与架构师的 21 天 Linux 命令实战训练 Web 应用。
 以场景化任务闯关 + 技能树成长 + 命令速查为核心，深色终端风格。
 
-- 前端：Vue 3 + TypeScript + Vite
+- 前端：Vue 3 + TypeScript + Vite + vue-router（无 Pinia、无 UI 组件库，见 §5）
 - 后端：Python 3.13 + FastAPI + SQLAlchemy 2.0（同步 ORM）
 - 数据库：MySQL 8.4（Docker 生产路径）/ SQLite（本地开发默认回退）
 - 缓存：Redis 7 —— **仅在 compose 中声明，代码中完全未使用**
@@ -192,10 +192,33 @@ backend/
 
 frontend/
   src/
-    App.vue        # 全部界面 + 全部业务逻辑（单文件，约 470 行）
-    main.ts        # createApp 挂载
+    App.vue        # 布局外壳：告警条 + 顶栏 + RouterView + 登录弹窗
+    main.ts        # createApp + 挂载 router
+    types.ts       # 接口类型，与后端 app/schemas.py 一一对应
+    router/
+      index.ts     # 路由表（history 模式，视图懒加载）
+    api/
+      client.ts    # 唯一的 fetch 封装：拼 URL、带 token、解析错误
+    stores/        # 模块级 ref 单例（无 Pinia）
+      session.ts   # 登录态、用户、打卡、技能树、进度
+      curriculum.ts# /api/v1/units 缓存（按账号失效）
+      ui.ts        # 登录弹窗开合
+    utils/
+      text.ts      # 课程文案的行内 Markdown 解析（不生成 HTML）
+    components/
+      TopBar.vue          # 顶栏导航 + 账号
+      AuthModal.vue       # 登录 / 注册弹窗
+      ProgressCard.vue    # 等级、经验条、连续打卡
+      SkillTreePanel.vue  # 按区域切换的技能树
+      QuestionPane.vue    # 4 种题型的作答区 + 判题反馈
+      InlineText.vue      # 渲染含行内代码/粗体的文案
+    views/
+      HomeView.vue        # 训练营首页
+      UnitsView.vue       # 课程地图（6 区域 × 21 单元）
+      UnitView.vue        # 单元内逐题作答
+      CommandsView.vue    # 命令速查（页面待实现，见 §7）
+      NotFoundView.vue    # 404
     styles.css     # 全局样式（深色终端风）
-    vite-env.d.ts
   index.html
   nginx.conf       # 生产：静态托管 + /api 反代到 backend:8000
   Dockerfile       # 多阶段：corepack + pnpm 构建 → nginx 托管
@@ -210,7 +233,7 @@ frontend/
 .gitattributes     # 固定 LF，避免 autocrlf 干扰 format:check
 ```
 
-**注意：`frontend/src/` 只有 4 个文件，没有组件拆分、没有 vue-router、没有 Pinia。** 仓库中显示的 1000+ 文件全部来自 `node_modules`。
+**注意：`frontend/src/` 下的文件全部是手写的源码。** 仓库中显示的 1000+ 文件全部来自 `node_modules`。
 
 ---
 
@@ -454,7 +477,24 @@ SUGGEST_TERM_TOPK = 6        # 每个词元只取最强的 6 条候选
 
 ## 5. 前端约定
 
+### 5.0 目录与架构
+
+**已引入 `vue-router`，视图与组件已拆分。** 这是刻意的架构决策（2026-09 前端改造），
+不要再把界面塞回单文件：
+
+- `src/views/` 一屏一个文件，对应一条路由；`src/components/` 放可复用块。
+- 路由用 **history 模式**。nginx（`try_files ... /index.html`）与 Vite dev server 都已支持回退，
+  所以 URL 可分享、可刷新、前进后退可用 —— 这是 4.4「命令 ↔ 任务双向跳转」的前提。
+- 视图一律**懒加载**（`() => import(...)`），命令速查与课程作答互不依赖，没必要一起进首屏包。
+- 新增页面必须同时在 `router/index.ts` 注册并给 `meta.title`（用于 `document.title`）。
+
+**前端运行时依赖刻意保持精简**：`vue` + `vue-router`（路由）+ `markdown-it` / `dompurify`
+（渲染课程 `knowledge` 与命令手册正文；DOMPurify 负责净化，因为上游 Markdown 允许内联 HTML）。
+新增依赖前先确认现有依赖解决不了 —— 不引 UI 组件库、不引状态库、不引 HTTP 客户端。
+
 ### 5.1 API 调用
+
+**所有请求都走 `src/api/client.ts` 的 `request()`**，不要在各处手写 `fetch`：
 
 ```ts
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') || ''
@@ -462,23 +502,35 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 
 - 开发：`API_BASE` 为空 → 相对路径 `/api/...` → Vite 代理到 `localhost:8000`
 - 生产：nginx 反代 `/api/` 到 `backend:8000`
-- 全部使用原生 `fetch`，**没有 axios**。错误处理为 `try/catch` + `console.warn`。
+- 原生 `fetch`，**没有 axios**。
+- token 由 `client.ts` 自己持有（`setToken` / `getToken`），避免 store 与 client 循环引用。
+- 错误分两类，**不要混用**：`ApiError`（后端返回 4xx/5xx，取 `detail` 展示给用户）
+  与网络失败（fetch reject，用 `isNetworkError()` 判断 → 顶部告警条）。
 
 ### 5.2 类型定义
 
-所有接口类型（`Quest` / `UserSummary` / `CheckInStatusType` / `SkillTreeType` 等）**定义在 `App.vue` 的 `<script setup>` 顶部**，不使用 `.d.ts` 或独立 `types/` 目录。
+接口类型集中在 `src/types.ts`，**与后端 `app/schemas.py` 一一对应**，字段名保持后端的下划线风格
+（直接赋值即可，不做转换）。改后端字段时**必须同步这里**（§12.1）。
 
 ### 5.3 状态管理
 
-全部使用 `ref` / `computed`，**无 Pinia、无 Vuex**。登录态在 `onMounted` 中通过 `/api/v1/auth/me` 恢复。
+`src/stores/` 下用**模块级 `ref` 单例**，仍然**无 Pinia、无 Vuex**：
+
+| 文件 | 职责 |
+| --- | --- |
+| `session.ts` | 登录态、用户、打卡、技能树、进度；`restoreSession()` 在 `App.vue` 的 `onMounted` 调用 |
+| `curriculum.ts` | `/api/v1/units` 缓存，按账号失效（换账号自动重拉） |
+| `ui.ts` | 登录弹窗开合与模式（任何视图都可能唤起登录） |
+
+组件内部状态用局部 `ref`；只有跨视图共享的才放进 store。
 
 ### 5.4 降级策略（重要）
 
-前端在 API 不可用时**不会崩溃**，而是使用本地兜底数据：
+前端在 API 不可用时**不会崩溃**，也不要出现白屏：
 
-- `fallbackQuests`：3 条演示任务
-- `DEFAULT_LEVEL`：guest 用户（0 XP / LV.01）
-- `apiUnavailable` ref 控制顶部橙色告警条
+- `DEFAULT_USER`：guest 用户（0 XP / LV.01），未登录时顶替展示
+- `apiUnavailable` 控制顶部橙色告警条（仅在**网络层失败**时置位，4xx/5xx 不算）
+- 各视图在 `error` 非空时渲染一条可读的提示 + 返回入口，而不是空白
 
 **新增功能时请沿用此降级模式**，不要引入「白屏」失败态。
 
@@ -489,6 +541,9 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 - 字体：`IBM Plex Sans`（正文）+ `DM Mono`（等宽/命令），通过 Google Fonts `@import` 引入。
 - 响应式断点：`@media (max-width: 720px)`。
 - 格式由 Prettier 统一维护（见 §5.6），**不要手工调整缩进或换行**。
+- **课程文案不要用 `v-html`**。`prompt` / `scenario` / `explanation` 里含行内 `` `code` `` 与
+  `**粗体**`，用 `utils/text.ts` 的 `parseInline()` 拆成片段后交给 `<InlineText>` 渲染
+  —— 既免疫 XSS，也不用为 `vue/no-v-html` 加豁免。
 
 ### 5.6 代码质量与格式（ESLint + Prettier）
 
@@ -499,7 +554,7 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 | 用途 | 工具 | 配置文件 |
 | --- | --- | --- |
 | 代码检查 | `eslint` + `eslint-plugin-vue` + `typescript-eslint` | `frontend/eslint.config.js`（flat config） |
-| 格式统一 | `prettier` + `eslint-config-prettier` | `frontend/.prettierrc.json`、`frontend/.prettierignore` |
+| 格式统一 | `prettier` + `eslint-config-prettier` | `frontend/.prettierrc`、`frontend/.prettierignore` |
 
 不使用已废弃的 `.eslintrc.*`。`eslint-config-prettier` 必须位于配置数组**最后一项**，用于关闭与 Prettier 冲突的风格规则。
 
@@ -512,7 +567,7 @@ pnpm run format        # Prettier 格式化全仓库
 pnpm run format:check  # Prettier 检查格式，不写入
 ```
 
-**格式基线（由 `.prettierrc.json` 强制执行）**
+**格式基线（由 `.prettierrc` 强制执行）**
 
 ```json
 {
@@ -650,16 +705,17 @@ MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB�
 
 | 需求 | 现状 |
 | --- | --- |
-| 4.4 命令查询的前端页面 | 后端已完整（导入脚本 + 614 条数据 + 列表/分面/详情/搜索接口），**前端仍是硬编码**：搜索页任何输入都只显示 `ss -ltnp` 一张卡片 |
-| 4.1 自由闯关主题地图 | 无地图视图。**数据结构已就绪**（`/api/v1/units` 返回按 `zone` 分组的单元 + 状态），但前端尚无地图页面 |
+| 4.4 命令查询的前端页面 | 后端已完整（导入脚本 + 614 条数据 + 列表/分面/详情/搜索接口）。前端仅有 `CommandsView.vue` 占位页（展示数据规模），**A–Z 索引 / 分类浏览 / 标签筛选 / 搜索 / 详情页均未实现** |
 | 4.3 成就 / 徽章 / 公开排行榜 | 前后端均无实现 |
-| 4.2 四种题型的前端交互 | 后端判题与作答接口已就绪，前端仍是单一模拟终端 |
 | 4.4.8 命令 → 任务的前端跳转入口 | 后端数据已就绪（详情接口返回 `related_quests`），前端无入口 |
+| 4.4.7 搜索交互（`/` 聚焦、`↑↓` 切换、即时联想） | 未实现 |
 
 已补齐、从本表移除的条目：
 
 - ~~4.1.1 场景化出题~~ —— 已由 `CourseUnit` / `Quest` / `QuestOption` 三层模型 + `curriculum/` 承载
 - ~~4.2 多种练习题型~~ —— 后端已支持 `terminal` / `fill` / `choice` / `judge` 四种题型与 5 种判题器
+- ~~4.2 四种题型的前端交互~~ —— `QuestionPane.vue` 已按 `kind` 分派：文本作答（terminal / fill）+ 选项作答（choice / judge），并渲染 `expected_display` / `explanation` / `pitfalls` / `safer_alt`
+- ~~4.1 自由闯关主题地图~~ —— `UnitsView.vue` 按区域分组展示 21 个单元与解锁状态
 - ~~4.4 命令速查的后端能力~~ —— 导入脚本、614 条数据、列表 / 分面 / 详情 / 关键词 / 自然语言检索接口均已实现
 - ~~4.4.8 命令 ↔ 任务关联的数据~~ —— 由 `quest_commands` 承载，与自然语言词表同源
 
@@ -670,6 +726,11 @@ MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB�
 - `submit_quest()` 中 `db.commit()` 被多次调用（`do_checkin` 内一次 + 函数末尾一次），逻辑可合并
 - `main.py` 已承载全部路由（课程 + 打卡 + 认证 + 命令查询），继续增长需要评估是否拆分 `APIRouter`
 - `curriculum/` 的题目内容目前为**手工撰写**，命令名未与上游命令库做交叉校验（可能写错）
+- **`fill` 题型题干与判题口径不一致**：题干写「补全命令：`uname -____`」，但 `judge_payload.terms`
+  要求答案包含 `uname` 与 `-r`，即必须提交**完整命令**。前端已在输入框上方标注「填写完整命令」兜住，
+  但更彻底的做法是改 13 道 `fill` 题的题干措辞
+- `choice` / `judge` 题型目前**全部为单选**（27 道题的 `correct_keys` 长度均为 1），
+  因此前端用单选交互。若以后出现多选题，`QuestionPane.vue` 的 `pick()` 需要改成多选
 - 上游有 38 条命令未提取出结构化选项、158 条未提取出示例（多为原文本身就没有该章节），
   详情页需保证渲染原文的降级路径可用
 - `容器基地` 分类只有 `docker` 一条 —— 上游 614 条命令里确实没有其他容器工具（无 podman / kubectl / helm）
@@ -733,6 +794,8 @@ feat: gitignore
 - [ ] 改了后端接口、判题、解锁或检索逻辑 → 是否跑过 `scripts/smoke_test.py` 且全部通过？（见 §2）
 - [ ] 新增命令分类值 → 是否加进了 `command_taxonomy.json` 的 `categories` 数组？`main.py` 的 `COMMAND_CATEGORY_ORDER` 是否同步？
 - [ ] 前端改动 → `pnpm run build` 是否通过（含 `vue-tsc` 类型检查）？`pnpm run lint` 是否零错误？（见 §0.3）
+- [ ] 新增前端页面 → 是否在 `router/index.ts` 注册并给了 `meta.title`？是否按 `views/` + `components/` 拆分？（见 §5.0）
+- [ ] 改了后端字段 → 是否同步了 `src/types.ts`？（见 §5.2）
 - [ ] 本次改动涉及的文件，是否都已按 §12.1 同步更新了对应文档？（见 §0.1）
 - [ ] `AGENTS.md` 是否已按 §0.2 同步？若有缺口被补齐，§7 的条目是否已删除？
 - [ ] 新增依赖 → 是否写入了 `requirements.txt` 或 `package.json`？
@@ -746,7 +809,11 @@ feat: gitignore
 - ❌ 不要绕过 `security.py` 自行实现口令处理；如需更换算法，连同已有哈希的兼容策略一并处理
 - ❌ 不要在响应中暴露 `password_hash`（`UserSummary` 已排除，新增用户相关 schema 时注意）
 - ❌ 不要删除 `shellquest.db` 之外的任何用户数据，除非明确要求并已确认
-- ❌ 不要为「顺手优化」而重构 `App.vue` 的单文件结构或引入路由/状态库 —— 这属于架构决策，先问
+- ❌ 不要在 `App.vue` 里重新堆积业务逻辑 —— 界面按 `views/`（一屏一文件）+ `components/`（可复用块）
+  拆分，路由在 `router/index.ts`（见 §5.0）。新增页面请照此拆分，不要退回单文件
+- ❌ 不要引入 Pinia / Vuex。跨视图共享的状态放 `src/stores/` 的模块级 `ref`（见 §5.3）
+- ❌ 不要在各组件里手写 `fetch` —— 统一走 `src/api/client.ts` 的 `request()`（见 §5.1）
+- ❌ 不要用 `v-html` 渲染课程文案 —— 用 `<InlineText>`（见 §5.5）
 - ❌ 不要把 Redis 当作已接入的能力来使用，除非你真的完成了接入
 - ❌ 不要用 npm / yarn / bun 安装前端依赖，也不要提交非 pnpm 锁文件（见 §0.4、§5.7）
 - ❌ 不要在课程列表 / 题目详情接口中下发答案字段（`answer_display` / `judge_payload` / 选项的 `is_correct`）。
@@ -772,6 +839,7 @@ feat: gitignore
 | 命令手册（导入脚本、分类映射、检索、种子快照） | `AGENTS.md` §2 + §4.8 + `REQUIREMENTS.md` §4.4 |
 | 业务规则（XP、等级、解锁、打卡） | `AGENTS.md` §4.5 |
 | 前端工具链与代码质量配置 | `AGENTS.md` §5.6 + `README.md` |
+| 前端目录结构、路由、状态管理、API 封装 | `AGENTS.md` §3 + §5.0–§5.5 |
 | 包管理器与锁文件策略 | `AGENTS.md` §5.7 + `README.md` |
 
 一次改动可能同时命中多行 —— **全部都要更新**。
