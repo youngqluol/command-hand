@@ -26,6 +26,9 @@ class User(Base):
     xp: Mapped[int] = mapped_column(Integer, default=0)
     streak_days: Mapped[int] = mapped_column(Integer, default=0)
     last_checkin_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # 训练路径：`camp` = 21 天训练营（单元严格串行解锁）；`free` = 自由闯关（任意选关）。
+    # 取值域见 schemas.TrainingMode，判定见 main.compute_unit_statuses()。
+    training_mode: Mapped[str] = mapped_column(String(16), default="camp")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

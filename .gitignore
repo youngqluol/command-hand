@@ -4,6 +4,12 @@ dist
 __pycache__
 *.py[cod]
 *.db
+# SQLite 的旁挂文件与手工备份。`*.db` 只覆盖主库文件本身，
+# 重建库时顺手改名的 shellquest.db.bak-* 会漏网（曾差点提交一个 8MB 的库备份）。
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.bak*
 .env
 .env.local
 .env.development.local

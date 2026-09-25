@@ -284,6 +284,66 @@ def main() -> int:
             str(sorted(board["entries"][0])),
         )
 
+        # --- 训练路径切换（REQUIREMENTS.md §3） ----------------------------- #
+        # 用第三个用户，避免影响上面基于 XP / 用户数 的排行榜断言。
+        registered3 = client.post(
+            "/api/v1/auth/register", json={"username": "smoke3", "password": "password123"}
+        ).json()
+        headers3 = {"X-Session-Token": registered3["token"]}
+        check(
+            "默认训练路径",
+            registered3["user"]["training_mode"] == "camp",
+            registered3["user"]["training_mode"],
+        )
+
+        units3 = client.get("/api/v1/units", headers=headers3).json()
+        check(
+            "训练营模式串行解锁",
+            units3[0]["status"] == "current" and units3[1]["status"] == "locked",
+            f"U1={units3[0]['status']} U2={units3[1]['status']}",
+        )
+        blocked = client.post(
+            f"/api/v1/quests/{units3[1]['quests'][0]['id']}/submit",
+            headers=headers3,
+            json={"answer": "x"},
+        )
+        check("训练营模式拦截越级", blocked.status_code == 403, f"HTTP {blocked.status_code}")
+
+        switched = client.post("/api/v1/user/mode", headers=headers3, json={"mode": "free"}).json()
+        check("切换为自由闯关", switched["training_mode"] == "free", switched["training_mode"])
+
+        units3 = client.get("/api/v1/units", headers=headers3).json()
+        check(
+            "自由闯关不设关卡锁",
+            units3[0]["status"] == "available" and units3[1]["status"] == "available",
+            f"U1={units3[0]['status']} U2={units3[1]['status']}",
+        )
+        # 单元可进入还不够，题目的状态也必须是可作答（漏改 compute_quest_statuses 会在这里挂）。
+        check(
+            "自由闯关下题目可作答",
+            units3[1]["quests"][0]["status"] == "current",
+            units3[1]["quests"][0]["status"],
+        )
+        allowed = client.post(
+            f"/api/v1/quests/{units3[1]['quests'][0]['id']}/submit",
+            headers=headers3,
+            json={"answer": "x"},
+        )
+        check("自由闯关可越级作答", allowed.status_code == 200, f"HTTP {allowed.status_code}")
+
+        reverted = client.post("/api/v1/user/mode", headers=headers3, json={"mode": "camp"}).json()
+        units3 = client.get("/api/v1/units", headers=headers3).json()
+        check(
+            "切回训练营恢复关卡锁",
+            reverted["training_mode"] == "camp" and units3[1]["status"] == "locked",
+            f"mode={reverted['training_mode']} U2={units3[1]['status']}",
+        )
+        check(
+            "非法训练路径被拒",
+            client.post("/api/v1/user/mode", headers=headers3, json={"mode": "nope"}).status_code == 422,
+            "应 422",
+        )
+
     if _failures:
         print(f"\n失败 {len(_failures)} 项：{', '.join(_failures)}")
         return 1

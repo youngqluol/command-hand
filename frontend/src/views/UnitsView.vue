@@ -3,9 +3,10 @@ import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { curriculum, curriculumError, curriculumLoading, loadUnits } from '../stores/curriculum'
-import { isLoggedIn } from '../stores/session'
+import { isLoggedIn, trainingMode } from '../stores/session'
 import type { Unit } from '../types'
 import InlineText from '../components/InlineText.vue'
+import TrainingModeSwitch from '../components/TrainingModeSwitch.vue'
 
 onMounted(() => loadUnits())
 
@@ -29,6 +30,7 @@ function statusLabel(unit: Unit): string {
   if (!unit.status) return '未开始'
   if (unit.status === 'done') return '已通关'
   if (unit.status === 'current') return '进行中'
+  if (unit.status === 'available') return '可挑战'
   return '未解锁'
 }
 
@@ -43,11 +45,20 @@ function clickable(unit: Unit): boolean {
     <header class="page-heading">
       <div>
         <p class="eyebrow">课程地图</p>
-        <h1>21 天训练营</h1>
-        <p class="muted">6 个主题区域，按运维现场的真实顺序推进。完成一个单元的全部题目即可解锁下一个。</p>
+        <h1>{{ trainingMode === 'free' ? '自由闯关' : '21 天训练营' }}</h1>
+        <p class="muted">
+          6 个主题区域，按运维现场的真实顺序推进。
+          {{
+            trainingMode === 'free'
+              ? '自由闯关不设关卡锁，任意单元随时可作答。'
+              : '完成一个单元的全部题目即可解锁下一个。'
+          }}
+        </p>
       </div>
       <p v-if="!isLoggedIn" class="muted hint">未登录：可自由浏览所有单元内容，进度不会被保存。</p>
     </header>
+
+    <TrainingModeSwitch />
 
     <p v-if="curriculumLoading && !curriculum.length" class="muted">正在加载课程…</p>
     <p v-else-if="curriculumError" class="feedback error-feedback">{{ curriculumError }}</p>

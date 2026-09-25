@@ -9,7 +9,15 @@
 import { computed, ref } from 'vue'
 
 import { ApiError, getToken, isNetworkError, request, setToken } from '../api/client'
-import type { AuthResponse, CheckInResponse, CheckInStatus, SkillTree, UserProgress, UserSummary } from '../types'
+import type {
+  AuthResponse,
+  CheckInResponse,
+  CheckInStatus,
+  SkillTree,
+  TrainingMode,
+  UserProgress,
+  UserSummary,
+} from '../types'
 
 /** 未登录 / 后端不可用时的占位用户。等级常量与后端 `schemas.py` 保持一致。 */
 export const DEFAULT_USER: UserSummary = {
@@ -22,6 +30,7 @@ export const DEFAULT_USER: UserSummary = {
   level_title: '初级探索者',
   level_xp_earned: 0,
   level_xp_total: 1000,
+  training_mode: 'camp',
 }
 
 const user = ref<UserSummary | null>(null)
@@ -39,6 +48,8 @@ export const userProgress = computed(() => progress.value)
 export const apiUnavailableState = computed(() => apiUnavailable.value)
 export const isRestoring = computed(() => restoring.value)
 export const isLoggedIn = computed(() => user.value !== null)
+/** 当前训练路径。未登录时恒为 `camp`，与后端默认值一致。 */
+export const trainingMode = computed<TrainingMode>(() => user.value?.training_mode ?? 'camp')
 
 export function setUser(next: UserSummary | null): void {
   user.value = next
@@ -157,4 +168,28 @@ export function dismissApiAlert(): void {
 export async function applySubmitResult(nextUser: UserSummary): Promise<void> {
   setUser(nextUser)
   await refreshProgress()
+}
+
+/**
+ * 切换训练路径（REQUIREMENTS.md §3）。
+ *
+ * 后端只改 `training_mode` 一个字段，两种模式共用同一份完成记录与经验值，所以
+ * **切换不丢进度**。但单元状态会整体重算（`locked` ⇄ `available`），因此这里在
+ * 写回用户后必须让课程缓存失效 —— `curriculum` store 监听 `currentUser`，
+ * `setUser` 换新对象即自动触发重拉，界面无需手动刷新。
+ *
+ * 未登录（无用户）直接返回 `false` 不发请求；请求失败则**向上抛出**，由调用方
+ * 展示原因（401 未登录 / 422 取值非法）。
+ */
+export async function setTrainingMode(mode: TrainingMode): Promise<boolean> {
+  if (!user.value) return false
+  if (user.value.training_mode === mode) return true
+
+  const payload = await request<UserSummary>('/api/v1/user/mode', {
+    method: 'POST',
+    body: { mode },
+  })
+  setUser(payload)
+  await refreshProgress()
+  return true
 }

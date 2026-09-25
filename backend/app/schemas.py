@@ -34,9 +34,12 @@ def compute_level_progress(xp: int) -> tuple[int, int]:
 
 
 QuestStatus = Literal["done", "current", "locked"]
-UnitStatus = Literal["done", "current", "locked"]
+# `available` 只在「自由闯关」模式下出现：该单元可作答，但不是循序推荐的下一个。
+UnitStatus = Literal["done", "current", "available", "locked"]
 QuestKind = Literal["terminal", "fill", "choice", "judge"]
 JudgeType = Literal["contains_all", "contains_any", "regex", "equals", "option"]
+# 训练路径（REQUIREMENTS.md §3）：camp = 21 天训练营（串行解锁）；free = 自由闯关（任意选关）
+TrainingMode = Literal["camp", "free"]
 
 
 # --------------------------------------------------------------------------- #
@@ -55,6 +58,7 @@ class UserSummary(BaseModel):
     xp: int
     streak_days: int
     created_at: datetime
+    training_mode: TrainingMode = "camp"
 
     model_config = {"from_attributes": True}
 
@@ -163,6 +167,12 @@ class UserProgress(BaseModel):
     completion_percent: float
     current_unit_id: int | None
     units: list[UnitSummary]
+
+
+class TrainingModeRequest(BaseModel):
+    """切换训练路径（REQUIREMENTS.md §3）。"""
+
+    mode: TrainingMode
 
 
 # --------------------------------------------------------------------------- #

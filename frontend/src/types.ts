@@ -6,8 +6,11 @@
  */
 
 export type QuestStatus = 'done' | 'current' | 'locked'
-export type UnitStatus = 'done' | 'current' | 'locked'
+/** `available` 只在「自由闯关」模式下出现：该单元可作答，但不是循序推荐的下一个。 */
+export type UnitStatus = 'done' | 'current' | 'available' | 'locked'
 export type QuestKind = 'terminal' | 'fill' | 'choice' | 'judge'
+/** 训练路径（REQUIREMENTS.md §3）：camp = 21 天训练营（串行解锁）；free = 自由闯关（任意选关） */
+export type TrainingMode = 'camp' | 'free'
 
 export type UserSummary = {
   id: number
@@ -19,6 +22,7 @@ export type UserSummary = {
   level_title: string
   level_xp_earned: number
   level_xp_total: number
+  training_mode: TrainingMode
 }
 
 export type AuthResponse = {

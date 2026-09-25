@@ -77,14 +77,23 @@ uvicorn app.main:app --reload --port 8000
 
 | 路由 | 页面 |
 | --- | --- |
-| `/` | 训练营首页（进度卡 + 技能树 + 当前任务） |
-| `/units`、`/units/:id` | 课程地图（6 区域 × 21 单元）、单元内逐题作答 |
+| `/` | 训练营首页（进度卡 + 技能树 + 当前任务 + 当前训练路径入口） |
+| `/units`、`/units/:id` | 课程地图（6 区域 × 21 单元，含「21 天训练营 / 自由闯关」切换）、单元内逐题作答 |
 | `/commands`、`/commands/:name` | 命令速查（A–Z / 分类 / 标签 / 关键词 / 自然语言）、命令详情 |
 | `/achievements` | 成就徽章墙（4 组 / 解锁态 / 进度） |
 | `/leaderboard` | 公开排行榜 |
 
 后端接口全部挂在 `/api/v1` 下。除 `GET /api/v1/leaderboard`（公开）与 `GET /api/v1/commands*`（公开）外，
 其余接口都需要 `X-Session-Token` 请求头。完整清单见 `AGENTS.md` §2。
+
+## 训练路径
+
+登录后可在课程地图页切换，服务端持久化在账号上：
+
+- **21 天训练营**（默认）—— 按单元循序解锁，完成一个单元才解锁下一个。
+- **自由闯关** —— 不设关卡锁，任意单元随时可挑战。
+
+两者共用同一份完成记录与经验值，**随时切换不丢进度**。
 
 ## Docker 部署
 
@@ -95,6 +104,9 @@ docker compose up --build
 ```
 
 前端默认运行在 `http://localhost:8080`，API 运行在 `http://localhost:8000`。
+
+> ⚠️ 该路径**尚未实测**：开发全程使用本地 SQLite + Vite，`docker compose up` 未在具备 Docker
+> 的环境中执行过（见 `AGENTS.md` §7）。
 
 ## 文档
 

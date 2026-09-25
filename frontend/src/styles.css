@@ -195,6 +195,17 @@ nav button.active {
   gap: 10px;
   margin-top: 23px;
 }
+/* 首页只做「当前路径」的提示与跳转，真正的切换器在课程地图页（TrainingModeSwitch）。 */
+.hero-mode-link {
+  display: inline-block;
+  margin-top: 14px;
+  color: #8fb2a0;
+  font-size: 12px;
+  text-decoration: none;
+}
+.hero-mode-link:hover {
+  color: #88e7a8;
+}
 .primary,
 .secondary {
   display: inline-flex;
@@ -906,6 +917,64 @@ nav button.active {
 .page-heading .hint {
   margin: 0;
 }
+
+/* 训练路径切换器（REQUIREMENTS.md §3）。
+   注意前缀用 `training-`：`.mode-switch` 已被命令速查页的「关键词/自然语言」切换占用。 */
+.training-switch {
+  display: grid;
+  gap: 10px;
+  padding: 16px 20px;
+}
+.training-switch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.training-switch-head .eyebrow {
+  margin: 0;
+}
+.training-switch-head .muted {
+  margin: 0;
+  font-size: 12px;
+}
+.training-switch-options {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #26373e;
+  border-radius: 8px;
+  background: #0f181d;
+  justify-self: start;
+}
+.training-switch-option {
+  border: 0;
+  border-radius: 5px;
+  padding: 8px 16px;
+  background: transparent;
+  color: #9dafb8;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.training-switch-option:hover:not(:disabled) {
+  color: #d7e5dc;
+}
+.training-switch-option.active {
+  background: #70e09b;
+  color: #0d2015;
+}
+.training-switch-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.training-switch-error {
+  margin: 0;
+}
+
 .zone-block {
   padding: 24px 25px;
 }
@@ -938,6 +1007,13 @@ nav button.active {
 .unit-card.locked {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* 自由闯关模式：单元未上锁但也不是循序推荐的下一个，用中性描边区分于 current。 */
+.unit-card.available {
+  border-color: #3a4d56;
+}
+.unit-card.available:hover {
+  border-color: #62c88b;
 }
 .unit-card-head {
   display: flex;
@@ -1951,6 +2027,15 @@ nav button.active {
 }
 
 @media (max-width: 720px) {
+  /* 切换器在窄屏占满整行，两个按钮等宽，触控目标更大 */
+  .training-switch-options {
+    display: flex;
+    width: 100%;
+  }
+  .training-switch-option {
+    flex: 1;
+    padding: 8px 10px;
+  }
   .badge-group {
     padding: 17px 15px;
   }

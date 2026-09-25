@@ -6,10 +6,12 @@ import ProgressCard from '../components/ProgressCard.vue'
 import SkillTreePanel from '../components/SkillTreePanel.vue'
 import InlineText from '../components/InlineText.vue'
 import { curriculum, curriculumError, loadUnits } from '../stores/curriculum'
-import { displayUser, isLoggedIn } from '../stores/session'
+import { displayUser, isLoggedIn, trainingMode } from '../stores/session'
 import { openAuth } from '../stores/ui'
 
 onMounted(() => loadUnits())
+
+const modeLabel = computed(() => (trainingMode.value === 'free' ? '自由闯关' : '21 天训练营'))
 
 /** 当前该做的单元：优先后端标出的 current，其次第一个未完成的，最后退回第一个。 */
 const currentUnit = computed(() => {
@@ -34,7 +36,7 @@ const doneQuests = computed(() => curriculum.value.reduce((sum, unit) => sum + u
 <template>
   <section class="dashboard">
     <div class="hero-card grid-lines">
-      <p class="eyebrow">{{ totalUnits || 21 }} 个课程单元 · 自由加速完成</p>
+      <p class="eyebrow">{{ totalUnits || 21 }} 个课程单元 · {{ modeLabel }}</p>
       <h1>把 Linux 命令，<br /><em>练成实战直觉。</em></h1>
       <p class="hero-copy">不是背命令。你会在发布、故障与运维现场中，找到解决问题的正确组合。</p>
       <div class="hero-actions">
@@ -44,6 +46,7 @@ const doneQuests = computed(() => curriculum.value.reduce((sum, unit) => sum + u
         <button v-else class="primary" disabled>加载课程中…</button>
         <RouterLink class="secondary" :to="{ name: 'commands' }">查询命令</RouterLink>
       </div>
+      <RouterLink class="hero-mode-link" :to="{ name: 'units' }"> 当前路径：{{ modeLabel }} · 切换 → </RouterLink>
       <p v-if="curriculumError" class="hero-warning">{{ curriculumError }}</p>
     </div>
 

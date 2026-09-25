@@ -60,7 +60,7 @@
 ## 1. 项目速览
 
 **ShellQuest** — 面向全栈开发者与架构师的 21 天 Linux 命令实战训练 Web 应用。
-以场景化任务闯关 + 技能树成长 + 命令速查 + 成就与排行榜为核心，深色终端风格。
+以场景化任务闯关（**21 天训练营 / 自由闯关双训练路径**）+ 技能树成长 + 命令速查 + 成就与排行榜为核心，深色终端风格。
 
 - 前端：Vue 3 + TypeScript + Vite + vue-router（无 Pinia、无 UI 组件库，见 §5）
 - 后端：Python 3.13 + FastAPI + SQLAlchemy 2.0（同步 ORM）
@@ -177,7 +177,7 @@ docker compose up --build     # 前端 :8080，后端 :8000，MySQL :3306，Redi
 backend/
   app/
     main.py        # 全部 HTTP 路由 + 判题引擎 + 课程落库 + 解锁算法 + 打卡逻辑
-    models.py      # SQLAlchemy 模型，11 张表
+    models.py      # SQLAlchemy 模型，13 张表
     schemas.py     # Pydantic 请求/响应模型 + 等级、称号、经验进度计算
     database.py    # engine / SessionLocal / Base
     security.py    # scrypt 口令哈希与校验
@@ -215,7 +215,7 @@ frontend/
     api/
       client.ts    # 唯一的 fetch 封装：拼 URL、带 token、解析错误
     stores/        # 模块级 ref 单例（无 Pinia）
-      session.ts   # 登录态、用户、打卡、技能树、进度
+      session.ts   # 登录态、用户、打卡、技能树、进度、训练路径
       curriculum.ts# /api/v1/units 缓存（按账号失效）
       achievements.ts # 成就目录缓存 + 「刚刚解锁」提示队列
       ui.ts        # 登录弹窗开合
@@ -232,9 +232,10 @@ frontend/
       MarkdownBlock.vue   # 渲染块级 Markdown（唯一允许 v-html 的地方）
       CommandCard.vue     # 命令列表项（浏览态与搜索态共用）
       AchievementToast.vue# 成就解锁提示（右下角，自动消失）
+      TrainingModeSwitch.vue # 训练路径切换（训练营 ⇄ 自由闯关，见 §4.5）
     views/
       HomeView.vue        # 训练营首页
-      UnitsView.vue       # 课程地图（6 区域 × 21 单元）
+      UnitsView.vue       # 课程地图（6 区域 × 21 单元，含训练路径切换）
       UnitView.vue        # 单元内逐题作答
       CommandsView.vue    # 命令速查：浏览 / 筛选 / 搜索 / 分页
       CommandDetailView.vue # 命令详情：章节 / 选项 / 实例 / 关联任务
@@ -301,7 +302,7 @@ X-Session-Token: <token>
 
 | 表 | 说明 | 关键约束 |
 | --- | --- | --- |
-| `users` | 用户 + `xp` / `streak_days` / `last_checkin_date` | `username` 唯一 |
+| `users` | 用户 + `xp` / `streak_days` / `last_checkin_date` / `training_mode` | `username` 唯一 |
 | `course_units` | 课程单元（21 个），含 `zone` / `title` / `goal` / `knowledge` | `order` 唯一（1..21） |
 | `quests` | 题目（63 道），含题型、场景、判题规则 | `order` 唯一（1..63），`unit_id` 外键 |
 | `quest_options` | `choice` / `judge` 题型的选项 | `(quest_id, key)` 唯一 |
@@ -333,17 +334,28 @@ X-Session-Token: <token>
 
 ### 4.5 关键业务规则（改动前务必理解）
 
+**训练路径（模式）** — `User.training_mode`（`camp` / `free`），`REQUIREMENTS.md` §3：
+
+- `camp`（21 天训练营，**默认**）：单元严格串行解锁，见下。
+- `free`（自由闯关）：**不设关卡锁**，未完成的单元一律 `available`，可任意越级作答。
+- 两种模式**共用同一份完成记录与经验值**，`training_mode` 只是 `compute_unit_statuses()` 的一个入参，
+  所以随时切换**不丢进度、不需要数据迁移**。切换接口 `POST /api/v1/user/mode`（需登录，取值非法 422）。
+- 前端切换入口只在课程地图页（`TrainingModeSwitch.vue`）；首页只显示当前路径并跳转过去。
+
 **单元解锁** — `compute_unit_statuses()`：
 
 - 按 `CourseUnit.order` 升序**严格串行**推进：单元 N 解锁 ⟺ 单元 1..N-1 全部完成。
 - 全部题目完成 → `done`；第一个未完成的单元 → `current`；其余 → `locked`。
 - 全局同一时刻**只有一个** `status == "current"` 的单元。
-- 状态枚举：`Literal["done", "current", "locked"]`（定义在 `schemas.py`）。
+- 状态枚举：`Literal["done", "current", "available", "locked"]`（定义在 `schemas.py`）。
+  **`available` 只在 `free` 模式下出现**：该单元可作答，但不是循序推荐的下一个。
+  `free` 模式下不存在 `locked`，`current_unit_id` 退化为「第一个未完成的单元」（仅用于首页推荐入口）。
 
 **题目状态** — `compute_quest_statuses()`：
 
 - 已完成的题 → `done`（即使它所在单元已不是 `current`，历史完成记录依然显示为已完成）。
 - 当前单元内未完成的题 → `current`（**同一单元内的题可以任意顺序作答**）。
+  `current` 与 `available` 的单元都算「已解锁」，其题状态一律为 `current`。
 - 锁定单元内的题 → `locked`。
 - `POST /api/v1/quests/{id}/submit` 会再次校验，对 `locked` 单元返回 403「该课程单元尚未解锁」。
 
@@ -580,13 +592,22 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 接口类型集中在 `src/types.ts`，**与后端 `app/schemas.py` 一一对应**，字段名保持后端的下划线风格
 （直接赋值即可，不做转换）。改后端字段时**必须同步这里**（§12.1）。
 
+枚举联合类型也在这里复刻一遍，**加取值时两侧都要改**：
+
+- `UnitStatus = 'done' | 'current' | 'available' | 'locked'`
+- `QuestStatus = 'done' | 'current' | 'locked'`
+- `QuestKind = 'terminal' | 'fill' | 'choice' | 'judge'`
+- `TrainingMode = 'camp' | 'free'`
+
+`UserSummary.training_mode` 必须存在于前端类型里，否则 `DEFAULT_USER` 会缺字段、`vue-tsc` 报错。
+
 ### 5.3 状态管理
 
 `src/stores/` 下用**模块级 `ref` 单例**，仍然**无 Pinia、无 Vuex**：
 
 | 文件 | 职责 |
 | --- | --- |
-| `session.ts` | 登录态、用户、打卡、技能树、进度；`restoreSession()` 在 `App.vue` 的 `onMounted` 调用 |
+| `session.ts` | 登录态、用户、打卡、技能树、进度、训练路径；`restoreSession()` 在 `App.vue` 的 `onMounted` 调用 |
 | `curriculum.ts` | `/api/v1/units` 缓存，按账号失效（换账号自动重拉） |
 | `achievements.ts` | 成就目录缓存 + 作答/打卡带回的「刚刚解锁」提示队列 |
 | `ui.ts` | 登录弹窗开合与模式（任何视图都可能唤起登录） |
@@ -597,6 +618,11 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 此时 `restoreSession()` 还没跑完、`currentUser` 仍是 `null`，请求会因缺 token 而失败。
 `AchievementsView.vue` 的做法是 `watch([isRestoring, isLoggedIn], ...)`，等会话恢复结束再拉
 （`/api/v1/units` 不需要 token，所以 `curriculum.ts` 没这个问题）。
+
+**切换训练路径后课程缓存怎么失效**：`setTrainingMode()` 只做两件事 —— POST `/api/v1/user/mode`
+拿到新的 `UserSummary`，然后 `setUser()` 换掉对象引用。`curriculum.ts` 里那句
+`watch(currentUser, ...)` 会因为引用变化自动 `loadUnits(true)` 重拉，**视图不需要手动刷新**。
+这就是「用户态变化 → 课程状态失效」的既有联动机制，别再写第二套。
 
 ### 5.4 降级策略（重要）
 
@@ -618,6 +644,13 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 - **课程文案不要用 `v-html`**。`prompt` / `scenario` / `explanation` 里含行内 `` `code` `` 与
   `**粗体**`，用 `utils/text.ts` 的 `parseInline()` 拆成片段后交给 `<InlineText>` 渲染
   —— 既免疫 XSS，也不用为 `vue/no-v-html` 加豁免。
+
+⚠️ **加新组件前先全局搜一遍类名。** `styles.css` 是单文件全局作用域，同名类会静默互相覆盖 ——
+后定义的那条赢。已经踩过一次：训练路径切换器最初起名 `.mode-switch`，被命令速查页的
+「关键词/自然语言」切换（`CommandsView.vue`，同样叫 `.mode-switch`）覆盖成了 `display: flex`，
+桌面端看着没事、移动端直接错位。现在训练路径统一用 `training-switch-*` 前缀。
+**判断方法**：`grep -rn "className" src/` 之外，最可靠的是在浏览器里查 `getComputedStyle`
+看 `display` 是不是你写的那条。
 
 ### 5.6 代码质量与格式（ESLint + Prettier）
 
@@ -763,7 +796,7 @@ RUN pnpm install --frozen-lockfile
 
 | 改了什么 | 需要做什么 |
 | --- | --- |
-| `models.py` 的**表/列定义** | 必须重建数据库（见上） |
+| `models.py` 的**表/列定义**（新增列也算，如 `users.training_mode`） | 必须重建数据库（见上）。**新增列不会自动生效**，老库会一直缺列并报 `no such column` |
 | `models.py` 中**只新增表**（如 `user_achievements` / `quest_attempts`） | **无需重建**：`create_all` 会自建缺失的表。老用户的成就由 `backfill_achievements()` 在下次启动补发（见 §4.9） |
 | `curriculum/` 的**题目内容** | 重启即可，`seed_curriculum()` 会幂等同步（见 §4.7） |
 | `curriculum/` 中**增删单元/题目**（`order` 位移） | 必须重建数据库，否则历史完成记录错位 |
@@ -779,16 +812,18 @@ MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB�
 
 以下功能在 `REQUIREMENTS.md` 中有定义，但**代码中尚未实现**：
 
-| 需求 | 现状 |
-| --- | --- |
-| 3 / 5 「自由闯关」模式 | 需求 §3 定义了两种训练路径：「21 天训练营」（按单元循序）与「自由闯关」（从主题地图自由选任务）。**代码里只有前者** —— 没有模式选择入口，登录用户的单元严格串行解锁（`compute_unit_statuses()`），无法跳过前置直接练后面的题。游客可自由浏览所有单元内容，但那是「未登录不记录进度」的副作用，不是自由闯关模式 |
+**（功能缺口已清零）** —— `REQUIREMENTS.md` §3 训练路径与 §4 第一期功能范围（课程 / 题型 /
+命令查询 / 成就 / 排行榜）均已全部落地，`backend/scripts/smoke_test.py` 的 37 条断言全绿。
 
-`REQUIREMENTS.md` §4 第一期功能范围（课程 / 题型 / 命令查询 / 成就 / 排行榜）已全部落地。
-**注意 §8 验收标准里还有一条未验证项**：Docker Compose 启动全栈（`docker-compose.yml` 存在，
-但本轮未实际执行验证），见 §2「全栈」。
+**但 §8 验收标准里还有一条未验证项**：Docker Compose 启动全栈（`docker-compose.yml` 存在，
+但本机**未安装 Docker**（`docker: command not found`），本轮未实际执行验证），见 §2「全栈」。
+**这是唯一一处「写了但没跑过」的东西**，具备 Docker 环境后应补做。
 
-已补齐、从本表移除的条目：
+已补齐、从缺口表移除的条目：
 
+- ~~3 / 5 「自由闯关」模式~~ —— `User.training_mode` + `POST /api/v1/user/mode` 已实现两种训练路径，
+  `compute_unit_statuses()` 按模式决定是否上锁；`TrainingModeSwitch.vue` 提供切换入口，
+  `UnitsView.vue` 把 `available` 渲染为可点击的「可挑战」卡片（浏览器已验证 camp ⇄ free 往返）
 - ~~4.1.1 场景化出题~~ —— 已由 `CourseUnit` / `Quest` / `QuestOption` 三层模型 + `curriculum/` 承载
 - ~~4.2 多种练习题型~~ —— 后端已支持 `terminal` / `fill` / `choice` / `judge` 四种题型与 5 种判题器
 - ~~4.2 四种题型的前端交互~~ —— `QuestionPane.vue` 已按 `kind` 分派：文本作答（terminal / fill）+ 选项作答（choice / judge），并渲染 `expected_display` / `explanation` / `pitfalls` / `safer_alt`
@@ -894,6 +929,12 @@ feat: gitignore
 - [ ] 改了排行榜字段 → 是否仍**只暴露** `rank` / `username` / `level` / `level_title` / `xp` / `streak_days` / `is_me`？不得带出邮箱或答题详情（见 §4.5）
 - [ ] 需要 token 的新页面 → 是否等 `isRestoring` 结束后再拉数据，而不是在 `onMounted` 里直接请求？（见 §5.3）
 - [ ] 改了后端字段 → 是否同步了 `src/types.ts`？（见 §5.2）
+- [ ] 改了单元 / 题目状态口径（`UnitStatus` / `QuestStatus`）→ `schemas.py`、`src/types.ts`、
+  `UnitsView.vue` 的 `statusLabel()` / `clickable()`、`UnitView.vue` 的 `isLocked` 是否都跟上？
+  `available` 漏判会表现成「卡片可点但显示未解锁」或「状态文案是英文枚举值」（见 §4.5）
+- [ ] 改了训练路径 → `TRAINING_MODES`（`main.py`）、`TrainingMode`（`schemas.py` + `types.ts`）、
+  `compute_unit_statuses()` 的分支、`TrainingModeSwitch.vue` 的 `MODES` 是否五处一致？是否跑过 `smoke_test.py` 的训练路径断言？
+- [ ] 新增全局 CSS 类名 → 是否与 `styles.css` 里已有类重名？（同名会静默覆盖，移动端才暴露，见 §5.5）
 - [ ] 本次改动涉及的文件，是否都已按 §12.1 同步更新了对应文档？（见 §0.1）
 - [ ] `AGENTS.md` 是否已按 §0.2 同步？若有缺口被补齐，§7 的条目是否已删除？
 - [ ] 新增依赖 → 是否写入了 `requirements.txt` 或 `package.json`？
@@ -938,9 +979,11 @@ feat: gitignore
 | 课程内容（题目、选项、判题规则、命令关联） | `AGENTS.md` §4.4 + §4.7 + `COURSE_DESIGN.md` |
 | 命令手册（导入脚本、分类映射、检索、种子快照） | `AGENTS.md` §2 + §4.8 + `REQUIREMENTS.md` §4.4 |
 | 业务规则（XP、等级、解锁、打卡） | `AGENTS.md` §4.5 |
+| 训练路径（`camp` / `free`）与解锁口径 | `AGENTS.md` §4.4 + §4.5 + `REQUIREMENTS.md` §3 / §8 |
 | 成就目录、判定规则、排行榜口径 | `AGENTS.md` §4.9 + `REQUIREMENTS.md` §4.3 / §4.5 |
 | 前端工具链与代码质量配置 | `AGENTS.md` §5.6 + `README.md` |
 | 前端目录结构、路由、状态管理、API 封装 | `AGENTS.md` §3 + §5.0–§5.5 |
+| 前端全局样式与类名约定 | `AGENTS.md` §5.5 |
 | 包管理器与锁文件策略 | `AGENTS.md` §5.7 + `README.md` |
 
 一次改动可能同时命中多行 —— **全部都要更新**。

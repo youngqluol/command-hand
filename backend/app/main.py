@@ -86,6 +86,7 @@ from .schemas import (
     SkillZone,
     SubmitRequest,
     SubmitResponse,
+    TrainingModeRequest,
     UnitSummary,
     UserProgress,
     UserSummary,
@@ -100,6 +101,11 @@ logger = logging.getLogger("shellquest")
 DAILY_CHECKIN_XP = 30
 UNIT_COMPLETION_BONUS = 60
 STREAK_LOOKBACK = 30
+
+# 训练路径（REQUIREMENTS.md §3）。取值域与 schemas.TrainingMode 一致，
+# 新增取值时两处都要改；请求体的合法性由 TrainingModeRequest 的 Literal 保证，这里不再重复校验。
+TRAINING_MODE_CAMP = "camp"
+TRAINING_MODE_FREE = "free"
 
 # 区域顺序：必须与 app/curriculum 的拼装顺序一致，否则技能树会错位。
 ZONE_ORDER = ["文件工坊", "系统哨站", "网络前线", "Shell 作战室", "容器基地", "故障指挥中心"]
@@ -580,32 +586,48 @@ def load_curriculum(db: Session) -> list[CourseUnit]:
 
 
 def compute_unit_statuses(
-    units: list[CourseUnit], completed_quest_ids: set[int]
+    units: list[CourseUnit], completed_quest_ids: set[int], mode: str = TRAINING_MODE_CAMP
 ) -> tuple[dict[int, str], int | None]:
-    """单元状态：按 order 严格串行解锁。
+    """单元状态。两种训练路径的差别只在这里（REQUIREMENTS.md §3）。
 
-    全部题目完成 → done；第一个未完成的单元 → current；其余 → locked。
+    - `camp`（21 天训练营）：按 order **严格串行**解锁。
+      全部题目完成 → done；第一个未完成的单元 → current；其余 → locked。
+    - `free`（自由闯关）：**不设关卡锁**，任意单元都能作答。
+      全部题目完成 → done；其余 → available。
+
+    两种模式共用同一份完成记录，所以随时切换都不会丢进度；`current_unit_id` 在 free 模式下
+    退化为「第一个未完成的单元」—— 仍然给首页一个可推荐的入口，但它不再是一道门。
     """
     status_map: dict[int, str] = {}
     current_unit_id: int | None = None
+    free = mode == TRAINING_MODE_FREE
     for unit in units:
         if unit.quests and all(q.id in completed_quest_ids for q in unit.quests):
             status_map[unit.id] = "done"
+            continue
+        if free:
+            status_map[unit.id] = "available"
         elif current_unit_id is None:
             status_map[unit.id] = "current"
-            current_unit_id = unit.id
         else:
             status_map[unit.id] = "locked"
+        # 两种模式都取「第一个未完成的单元」当首页推荐入口；free 模式下它不再是关卡门。
+        if current_unit_id is None:
+            current_unit_id = unit.id
     return status_map, current_unit_id
 
 
 def compute_quest_statuses(
     units: list[CourseUnit], completed_quest_ids: set[int], unit_status: dict[int, str]
 ) -> dict[int, str]:
-    """题目状态：当前单元内的题都可作答，锁定单元内的题一律 locked。"""
+    """题目状态：可作答单元内的题都可作答，锁定单元内的题一律 locked。
+
+    `available`（自由闯关模式下的未完成单元）同样算「可作答」—— 漏掉它会让自由模式
+    的单元点进去但所有题都是 locked。
+    """
     status_map: dict[int, str] = {}
     for unit in units:
-        unlocked = unit_status.get(unit.id) == "current"
+        unlocked = unit_status.get(unit.id) in {"current", "available"}
         for quest in unit.quests:
             if quest.id in completed_quest_ids:
                 status_map[quest.id] = "done"
@@ -774,7 +796,7 @@ def list_units(
     if user is None:
         return [build_unit_summary(u, None, None) for u in units]
     done = completed_quest_ids(db, user)
-    unit_status, _ = compute_unit_statuses(units, done)
+    unit_status, _ = compute_unit_statuses(units, done, user.training_mode)
     quest_status = compute_quest_statuses(units, done, unit_status)
     return [build_unit_summary(u, unit_status, quest_status) for u in units]
 
@@ -785,7 +807,7 @@ def get_user_progress(
 ) -> UserProgress:
     units = load_curriculum(db)
     done = completed_quest_ids(db, user)
-    unit_status, current_unit_id = compute_unit_statuses(units, done)
+    unit_status, current_unit_id = compute_unit_statuses(units, done, user.training_mode)
     quest_status = compute_quest_statuses(units, done, unit_status)
     summaries = [build_unit_summary(u, unit_status, quest_status) for u in units]
 
@@ -809,6 +831,25 @@ def get_user_skills(
     db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> SkillTree:
     return build_skill_tree(db, user)
+
+
+@app.post("/api/v1/user/mode", response_model=UserSummary)
+def set_training_mode(
+    payload: TrainingModeRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> UserSummary:
+    """切换训练路径（REQUIREMENTS.md §3）。
+
+    两种模式共用同一份完成记录与经验值，所以切换**不丢进度**，也不需要任何数据迁移：
+    模式只影响 `compute_unit_statuses()` 是否给未完成单元上锁。
+    """
+    if payload.mode != user.training_mode:
+        logger.info("用户 %s 切换训练路径：%s → %s", user.username, user.training_mode, payload.mode)
+        user.training_mode = payload.mode
+        db.commit()
+        db.refresh(user)
+    return UserSummary.model_validate(user)
 
 
 # --------------------------------------------------------------------------- #
@@ -944,7 +985,8 @@ def submit_quest(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="题目未归属任何单元")
 
     done = completed_quest_ids(db, user)
-    unit_status, _ = compute_unit_statuses(units, done)
+    unit_status, _ = compute_unit_statuses(units, done, user.training_mode)
+    # 自由闯关不设关卡锁，只保留「单元必须存在」这一层校验。
     if unit_status.get(unit.id) == "locked":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="该课程单元尚未解锁")
 
