@@ -6,7 +6,14 @@ import { apiPrefix } from './api/client'
 import AchievementToast from './components/AchievementToast.vue'
 import AuthModal from './components/AuthModal.vue'
 import TopBar from './components/TopBar.vue'
-import { apiUnavailableState, dismissApiAlert, restoreSession } from './stores/session'
+import {
+  apiUnavailableState,
+  dismissApiAlert,
+  dismissSessionAlert,
+  restoreSession,
+  sessionExpiredState,
+} from './stores/session'
+import { openAuth } from './stores/ui'
 
 onMounted(restoreSession)
 
@@ -19,6 +26,12 @@ onMounted(restoreSession)
  */
 function resetScroll(): void {
   window.scrollTo(0, 0)
+}
+
+/** 会话过期的告警条上直接给一个重新登录入口，省得用户去右上角找。 */
+function relogin(): void {
+  dismissSessionAlert()
+  openAuth('login')
 }
 </script>
 
@@ -37,6 +50,22 @@ function resetScroll(): void {
         </small>
       </div>
       <button class="alert-close" aria-label="关闭提示" @click="dismissApiAlert">×</button>
+    </div>
+
+    <!--
+      会话过期提示。只在「带着 token 却拿到 401」时出现（client.ts 的回调），
+      登录/注册接口的 401 已排除 —— 那是密码错误，不是会话过期。
+      用告警条而不是 toast：这是**持续状态**（你现在是游客），不是一闪而过的事件，
+      而且需要一个「重新登录」的落点。
+    -->
+    <div v-if="sessionExpiredState" class="session-alert">
+      <span class="alert-mark">🔒</span>
+      <div>
+        <strong>登录已过期</strong>
+        <small>你的登录状态在服务器端已失效，本地已切回游客视图。重新登录即可继续，进度都还在。</small>
+      </div>
+      <button class="text-button session-relogin" @click="relogin">重新登录</button>
+      <button class="alert-close" aria-label="关闭提示" @click="dismissSessionAlert">×</button>
     </div>
 
     <!--

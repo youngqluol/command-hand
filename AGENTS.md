@@ -637,9 +637,31 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 
 - `DEFAULT_USER`：guest 用户（0 XP / LV.01），未登录时顶替展示
 - `apiUnavailable` 控制顶部橙色告警条（仅在**网络层失败**时置位，4xx/5xx 不算）
+- `sessionExpired` 控制顶部绿色告警条「登录已过期 + 重新登录」
 - 各视图在 `error` 非空时渲染一条可读的提示 + 返回入口，而不是空白
 
 **新增功能时请沿用此降级模式**，不要引入「白屏」失败态。
+
+**会话失效（401）的处理链路**
+
+带着 token 发请求却拿到 401，说明会话在服务端已经没了（被清库、用户被删、token 被回收）。
+这条链路的每一环都有原因，别随手改：
+
+| 环节 | 位置 | 为什么在这里 |
+| --- | --- | --- |
+| 识别 401 | `api/client.ts` 的 `request()` | 只有这里能看到响应状态；client 不能反向 import store（循环引用） |
+| 排除登录/注册 | `isAuthCredentialEndpoint()` | 那两个接口用 401 表示「用户名或密码错误」，是业务错误，不是会话过期 |
+| 回调注册 | `session.ts` 的 `setSessionExpiredHandler()` | store 反向注册，保持 client 无依赖 |
+| 清凭据 + 置位 | `handleSessionExpired()` | 登出与会话失效共用 `clearUserState()`，避免两处漏清字段 |
+| 提示 UI | `App.vue` 的 `.session-alert` | 用告警条而不是 toast：这是**持续状态**（你现在是游客），且需要「重新登录」的落点 |
+
+⚠️ 早先版本是**静默**清掉失效 token，结果是用户重开页面发现自己莫名其妙变成游客，
+只能自己猜原因。改成显式提示是刻意的，别再改回去。
+
+**422 校验错误**：FastAPI / Pydantic 的 `detail` 是**数组**而不是字符串，
+`request()` 里必须走 `describeValidationError()` 分支，否则界面只会显示
+「请求失败（HTTP 422）」，用户完全不知道哪个字段错了。同理，**新增后端接口时
+`detail` 一律写中文字符串**，能走到 422 数组分支的都是前端漏了约束。
 
 ### 5.5 样式
 
@@ -718,6 +740,45 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 - 表单加 `novalidate`，去掉 `required` / `minlength`：浏览器原生气泡提示样式不可控、也没法做成行内文案。
 - **服务端错误要落到对应字段**：409 → 用户名，401 → 密码，网络/5xx → 表单级。落字段后同样要
   `focus()`，否则用户只看到红字却不知道光标该去哪。
+
+**弹窗（模态）的四个必备件**
+
+`AuthModal.vue` 是唯一模态，新增模态请照抄这四条，缺一条都会让某类用户用不了：
+
+| 必备件 | 做法 | 不做会怎样 |
+| --- | --- | --- |
+| ESC 关闭 | `window` 的 `keydown` 监听，开关时挂/卸 | 键盘用户只能去找那个 × |
+| 锁定背景滚动 | `body.style.overflow = 'hidden'` + `padding-right` 补偿滚动条宽度 | 滚动穿透，弹窗后面在动 |
+| 焦点圈在弹窗内 | Tab 首尾环绕（`trapFocus`），打开时把焦点移进面板 | 焦点跑到弹窗**背后**，键盘用户看不见焦点、回车还可能点到背后链接 |
+| dialog 语义 | `role="dialog"` + `aria-modal="true"` + `aria-labelledby` 指向标题 | 读屏用户不知道弹出了一个对话框 |
+
+- 锁滚动用 `body { overflow: hidden }`：规范会把它提升到视口（`html` 的 overflow 是 visible），
+  所以视口不滚动、但 `body` 的 used value 仍是 visible —— **顶栏的 `position: sticky` 不受影响**。
+  滚动位置也会保留（已实测：锁滚动前后 `scrollY` 都是 803）。
+- 补偿 `padding-right` 是为了不让滚动条消失导致整页左右跳一下。实测有 15px 的差距，
+  `.topbar-inner` / `.app-shell` 的 `left` 在锁定前后必须一致。
+- **验证锁滚动不能用 `window.scrollBy`**：`overflow: hidden` 的容器仍允许**编程**滚动
+  （只有 `overflow: clip` 才禁止）。必须用真实手势 —— Playwright 里是 `mouse.wheel()` 或 `PageDown`。
+- **Playwright headless 默认带 `--hide-scrollbars`**，滚动条宽度恒为 0，补偿逻辑永远测不到。
+  要测就加 `ignoreDefaultArgs: ['--hide-scrollbars']`。
+- 焦点圈实现时不要给面板加焦点环：面板带 `tabindex="-1"` 只为被程序聚焦，
+  `.auth-modal` 上写了 `outline: none`。
+
+**`display: contents` 用来在窄屏重排「跨容器」的卡片**
+
+命令详情页的「课程关联」卡在窄屏要排到正文**之前**，但它和另外两张卡一起装在 `.command-aside` 里，
+`order` 跨不过容器边界。做法是窄屏给 `.command-aside` 加 `display: contents` —— 容器不再生成盒子，
+三张卡直接变成 `.command-detail-layout` 的栅格项，于是 `order: -1` 只提第一张。
+代价是 `.command-aside` 自己的 `gap` 失效，改由父级栅格的 `gap` 接管（视觉上更统一）。
+桌面端不受影响，那里仍是整列 sticky 的 `.command-aside`。
+
+**共用排版的告警条：选择器必须成对写**
+
+`.api-alert`（后端不可达）与 `.session-alert`（登录过期）共用一套排版，只在配色上分叉。
+加新变体时，`.alert-mark` / `strong` / `small` / `.alert-close` 的**布局**规则要写成
+`.api-alert X, .session-alert X`，只给新变体加一条会静默少一半样式。
+窄屏折行用 grid 显式定位（`grid-row` / `grid-column`），不要用 `flex-wrap` ——
+后者会把 `🔒` 图标单独甩到第一行，因为它是第一个 flex 项。
 
 ### 5.6 代码质量与格式（ESLint + Prettier）
 
@@ -1086,6 +1147,15 @@ feat: gitignore
   `App.vue` 的 `@before-enter`？（放回 `scrollBehavior` 会出现「旧页面先跳顶再淡出」的闪烁，见 §5.5）
 - [ ] 改了登录 / 注册表单校验 → 是否与 `schemas.RegisterRequest` 的 `Field` 约束一致？提示是否常驻
   占位（不能顶动提交按钮）？服务端 409 / 401 是否仍落到对应字段并聚焦？（见 §5.5）
+- [ ] 新增模态弹窗 → ESC 关闭、锁定背景滚动（含滚动条宽度补偿）、焦点圈在弹窗内、`role="dialog"`
+  四条是否齐？（见 §5.5）验证锁滚动要用真实滚动手势，`window.scrollBy` 测不出来
+- [ ] 改了 401 相关逻辑 → 登录 / 注册接口的 401（密码错误）是否仍被排除在「会话过期」之外？
+  `sessionExpired` 是否在拿到有效用户后被清掉？（见 §5.4）
+- [ ] 新增后端接口的错误分支 → `detail` 是否是**中文字符串**？返回数组只会让前端显示
+  「请求参数不合法 —— 字段名：英文 msg」（见 §5.4）
+- [ ] 新增顶部告警条变体 → `.alert-mark` / `strong` / `small` / `.alert-close` 的布局规则是否
+  写成了成对选择器？（见 §5.5）
+- [ ] 窄屏要重排「跨容器」的卡片 → 是否用 `display: contents` + `order`，而不是复制一份 DOM？（见 §5.5）
 - [ ] 改了 `models.py` 的表/列 → 目标环境是**已有数据的库**吗？`create_all` 不会改已有表，
   跨版本升级必须重建卷或手工 `ALTER`（见 §6、§7）
 - [ ] 改了 `docker-compose.yml` 的 `ports` → 公网服务器上 MySQL / Redis 是否仍绑在 `0.0.0.0`？
@@ -1142,6 +1212,8 @@ feat: gitignore
 | 前端目录结构、路由、状态管理、API 封装 | `AGENTS.md` §3 + §5.0–§5.5 |
 | 前端全局样式与类名约定 | `AGENTS.md` §5.5 |
 | 栅格布局 / 横向溢出 / 吸顶顶栏 / 动效 / 表单行内校验 | `AGENTS.md` §5.5 + §10 |
+| 降级策略、会话失效（401）、错误文案 | `AGENTS.md` §5.4 |
+| 弹窗（模态）交互、告警条、窄屏跨容器重排 | `AGENTS.md` §5.5 |
 | 包管理器与锁文件策略 | `AGENTS.md` §5.7 + `README.md` |
 
 一次改动可能同时命中多行 —— **全部都要更新**。

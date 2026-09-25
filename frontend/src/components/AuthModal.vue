@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import { ApiError, isNetworkError } from '../api/client'
 import { authenticate } from '../stores/session'
@@ -14,6 +14,9 @@ import { authModalOpen, authMode, closeAuth } from '../stores/ui'
  */
 
 const USERNAME_PATTERN = /^[a-zA-Z0-9_-]+$/
+/** 焦点圈内可聚焦的元素。用于 Tab 环绕（见 `trapFocus`）。 */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
 
 const credentials = ref({ username: '', password: '' })
 const pending = ref(false)
@@ -27,6 +30,8 @@ const touched = ref({ username: false, password: false })
 
 const usernameInput = ref<HTMLInputElement | null>(null)
 const passwordInput = ref<HTMLInputElement | null>(null)
+/** 弹窗面板本身。带 `tabindex="-1"`，打开时聚焦它把焦点移进弹窗。 */
+const panel = ref<HTMLFormElement | null>(null)
 
 const title = computed(() => (authMode.value === 'login' ? '回到训练场' : '创建你的档案'))
 const subtitle = computed(() =>
@@ -75,17 +80,102 @@ function onInput(field: 'username' | 'password'): void {
   if (touched.value[field]) validateField(field)
 }
 
-// 关掉弹窗就清掉残留的错误与输入，避免下次打开还显示上一次的报错。
-watch(authModalOpen, (open) => {
-  if (open) return
-  resetValidation()
-  credentials.value = { username: '', password: '' }
-})
-
+/** 登录 ⇄ 注册。切换时清掉上一模式留下的红字，否则会显示与当前模式无关的错误。 */
 function switchMode(): void {
   authMode.value = authMode.value === 'login' ? 'register' : 'login'
   resetValidation()
 }
+
+/* ---------------------------------------------------------------------- */
+/* 弹窗交互：锁定背景滚动 / ESC 关闭 / 焦点圈在弹窗内                       */
+/* ---------------------------------------------------------------------- */
+
+/** 打开前的 body 内联样式，关闭时原样还原。 */
+let previousBodyOverflow = ''
+let previousBodyPaddingRight = ''
+
+/**
+ * 锁定背景滚动。
+ *
+ * `body { overflow: hidden }` 会被规范提升到视口（`html` 的 overflow 是 visible），
+ * 所以视口不再滚动、但 `body` 自身的 used value 仍是 visible —— `position: sticky`
+ * 的顶栏因此不受影响，滚动位置也不会丢。
+ *
+ * 滚动条消失会让整页宽度变化、内容左右跳一下，所以补一段 `padding-right`
+ * 抵掉滚动条宽度（只有桌面端有经典滚动条，移动端这个值是 0）。
+ */
+function lockScroll(): void {
+  const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth
+  previousBodyOverflow = document.body.style.overflow
+  previousBodyPaddingRight = document.body.style.paddingRight
+  document.body.style.overflow = 'hidden'
+  if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`
+}
+
+function unlockScroll(): void {
+  document.body.style.overflow = previousBodyOverflow
+  document.body.style.paddingRight = previousBodyPaddingRight
+}
+
+/**
+ * 把 Tab 焦点圈在弹窗里。不做的话焦点会跑到弹窗**背后**的页面上 ——
+ * 键盘用户看不见自己焦点在哪，回车还可能触发到背后的链接。
+ * 只在首尾补环绕，中间交给浏览器默认行为。
+ */
+function trapFocus(event: KeyboardEvent): void {
+  const scope = panel.value
+  if (!scope) return
+  const items = [...scope.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0)
+  if (!items.length) return
+  const first = items[0]
+  const last = items[items.length - 1]
+  const active = document.activeElement
+  const inside = scope.contains(active)
+  if (event.shiftKey) {
+    if (active === first || !inside) {
+      event.preventDefault()
+      last.focus()
+    }
+  } else if (active === last || !inside) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeAuth()
+    return
+  }
+  if (event.key === 'Tab') trapFocus(event)
+}
+
+// 关掉弹窗就清掉残留的错误与输入，避免下次打开还显示上一次的报错。
+watch(authModalOpen, (open) => {
+  if (open) {
+    window.addEventListener('keydown', onKeydown)
+    lockScroll()
+    // 聚焦面板而不是第一个输入框：移动端聚焦输入框会立刻弹出软键盘，把半屏内容挡掉。
+    // 面板带 tabindex="-1"，聚焦后按 Tab 会落到关闭按钮，再往后就是输入框。
+    void nextTick(() => panel.value?.focus())
+    return
+  }
+  window.removeEventListener('keydown', onKeydown)
+  unlockScroll()
+  resetValidation()
+  credentials.value = { username: '', password: '' }
+})
+
+// 弹窗组件常驻在 App.vue，正常不会卸载；这里只为「带锁卸载」兜底。
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  unlockScroll()
+})
+
+/* ---------------------------------------------------------------------- */
+/* 提交                                                                    */
+/* ---------------------------------------------------------------------- */
 
 /** 把焦点挪到第一个出错的输入框，键盘用户不用自己找错在哪。 */
 async function focusFirstInvalid(): Promise<void> {
@@ -142,10 +232,24 @@ async function submit(): Promise<void> {
 <template>
   <Transition name="modal">
     <div v-if="authModalOpen" class="modal-backdrop" @click.self="closeAuth">
-      <form class="auth-modal panel" novalidate @submit.prevent="submit">
+      <!--
+        role="dialog" 直接放在 <form> 上，而不是再加一层 wrapper：多一层会打断
+        `.modal-backdrop` 的 grid 居中与 `.auth-modal` 的 `width: min(100%, 390px)` 取值链。
+        `aria-labelledby` 指向标题，读屏会先念「回到训练场，对话框」。
+      -->
+      <form
+        ref="panel"
+        class="auth-modal panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="auth-modal-title"
+        tabindex="-1"
+        novalidate
+        @submit.prevent="submit"
+      >
         <button type="button" class="close" aria-label="关闭" @click="closeAuth">×</button>
         <p class="eyebrow">账户</p>
-        <h2>{{ title }}</h2>
+        <h2 id="auth-modal-title">{{ title }}</h2>
         <p class="auth-subtitle">{{ subtitle }}</p>
 
         <label class="auth-field">

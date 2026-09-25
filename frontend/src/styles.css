@@ -30,33 +30,64 @@ button {
   margin: 0 auto;
   padding-bottom: 48px;
 }
-.api-alert {
+/*
+ * 顶部告警条。两条共用同一套排版，只在配色上区分：
+ * 橙色 `.api-alert` = 后端不可达（环境问题），绿色 `.session-alert` = 需要重新登录。
+ *
+ * ⚠️ `.alert-mark` / `strong` / `small` / `.alert-close` 的布局规则必须成对写选择器 ——
+ * 只给新变体加一条而不改共用选择器，会静默少一半样式（这条文件是全局作用域，见 §5.5）。
+ */
+.api-alert,
+.session-alert {
   display: flex;
   gap: 12px;
   align-items: flex-start;
   margin: 16px 0 0;
   padding: 12px 14px;
-  border: 1px solid #7a472b;
+  border: 1px solid;
   border-radius: 8px;
+}
+.api-alert {
+  border-color: #7a472b;
   background: linear-gradient(180deg, #2a1810, #1c0f08);
   color: #f1cba6;
 }
-.api-alert .alert-mark {
+.session-alert {
+  border-color: #3a6b4c;
+  background: linear-gradient(180deg, #10241a, #0b1712);
+  color: #a9d6bb;
+}
+.api-alert .alert-mark,
+.session-alert .alert-mark {
   font-size: 20px;
   line-height: 1;
+}
+.api-alert .alert-mark {
   color: #f2a15b;
 }
-.api-alert strong {
+.api-alert strong,
+.session-alert strong {
   display: block;
   font-size: 14px;
+}
+.api-alert strong {
   color: #f7cf9a;
 }
-.api-alert small {
+.session-alert strong {
+  color: #c8f0d8;
+}
+.api-alert small,
+.session-alert small {
   display: block;
   margin-top: 4px;
   font-size: 12px;
-  color: #c6a98b;
   line-height: 1.55;
+}
+.api-alert small {
+  color: #c6a98b;
+}
+.session-alert small {
+  color: #8fb8a1;
 }
 .api-alert small code {
   color: #f3c48a;
@@ -66,14 +97,58 @@ button {
   padding: 1px 5px;
   border-radius: 3px;
 }
-.api-alert .alert-close {
+.api-alert .alert-close,
+.session-alert .alert-close {
   margin-left: auto;
   border: 0;
   background: transparent;
-  color: #d7a473;
   font-size: 20px;
   padding: 0 4px;
   line-height: 1;
+}
+.api-alert .alert-close {
+  color: #d7a473;
+}
+.session-alert .alert-close {
+  margin-left: 0;
+  color: #7fae94;
+}
+.session-alert .session-relogin {
+  margin-left: auto;
+  flex: 0 0 auto;
+  align-self: center;
+  /* 这是告警条的主操作，`.text-button` 本身是无边框纯文字，补个描边让它看起来可点。 */
+  border: 1px solid #3a6b4c;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.session-alert .session-relogin:hover {
+  border-color: #70e09b;
+  color: #a8f0c4;
+}
+
+@media (max-width: 720px) {
+  /*
+   * 会话告警条在窄屏折成两行：「🔒 + 说明」一行，「重新登录 + 关闭」一行。
+   * 用 grid 显式定位而不是 flex-wrap —— 后者会把 🔒 图标单独甩到第一行（它是第一个 flex 项）。
+   */
+  .session-alert {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+  }
+  .session-alert .session-relogin {
+    grid-row: 2;
+    grid-column: 2 / 4;
+    justify-self: start;
+    margin: 8px 0 0;
+  }
+  .session-alert .alert-close {
+    grid-row: 1;
+    grid-column: 3;
+  }
 }
 /*
  * 吸顶顶栏。两层结构：外层 `.topbar` 通栏吸顶并铺毛玻璃底，内层 `.topbar-inner`
@@ -836,6 +911,9 @@ nav button.active {
   position: relative;
   width: min(100%, 390px);
   padding: 31px;
+  /* 面板带 tabindex="-1"，打开时会被程序聚焦（把焦点移进弹窗，见 AuthModal.vue）。
+     它不可 Tab 到，不需要焦点环，否则会看到一圈包住整个弹窗的描边。 */
+  outline: none;
 }
 .auth-modal h2 {
   margin: 0;
@@ -1775,9 +1853,26 @@ nav button.active {
   .command-detail-layout {
     grid-template-columns: minmax(0, 1fr);
   }
-  .filters,
+  .filters {
+    position: static;
+  }
+  /*
+   * 窄屏把「课程关联」提到正文之前。
+   *
+   * 它是命令详情页唯一的行动入口（"这些关卡会用到 ls"），原来排在 49 行选项 + 15 个示例
+   * 之后，手机上基本等于看不到。
+   *
+   * `display: contents` 让三张卡直接变成 `.command-detail-layout` 的栅格项，于是可以用
+   * `order` 只把第一张提前 —— 另外两张（相关命令 / 来源与许可）留在文末更合适，
+   * 不该一起顶到最前面。桌面端不受影响：那里仍是整列 sticky 的 `.command-aside`。
+   * 副作用是 `.command-aside` 自己的 `gap` 失效，改由父级栅格的 `gap` 接管（视觉上更统一）。
+   */
   .command-aside {
     position: static;
+    display: contents;
+  }
+  .command-aside > .aside-card:first-child {
+    order: -1;
   }
   .search-bar {
     padding: 12px 14px;

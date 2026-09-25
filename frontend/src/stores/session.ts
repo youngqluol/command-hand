@@ -4,11 +4,13 @@
  * 所有写操作都吞掉异常并降级，界面永远不白屏（AGENTS.md §5.4）：
  * - 网络不可达 → `apiUnavailable = true`，顶部显示告警条
  * - 业务错误（如 401）→ 清掉本地 token，回到未登录态
+ * - 会话在服务端失效（401）→ 额外置 `sessionExpired`，顶部提示「登录已过期 + 重新登录」
+ *   （此前是静默清掉，用户只会莫名其妙发现自己变游客了，见 §5.4）
  */
 
 import { computed, ref } from 'vue'
 
-import { ApiError, getToken, isNetworkError, request, setToken } from '../api/client'
+import { ApiError, getToken, isNetworkError, request, setSessionExpiredHandler, setToken } from '../api/client'
 import type {
   AuthResponse,
   CheckInResponse,
@@ -39,6 +41,8 @@ const skills = ref<SkillTree | null>(null)
 const progress = ref<UserProgress | null>(null)
 const apiUnavailable = ref(false)
 const restoring = ref(true)
+/** 会话在服务端失效（带着 token 却拿到 401）时置位，用于提示用户重新登录。 */
+const sessionExpired = ref(false)
 
 export const currentUser = computed(() => user.value)
 export const displayUser = computed(() => user.value ?? DEFAULT_USER)
@@ -46,6 +50,7 @@ export const checkinStatus = computed(() => checkin.value)
 export const skillTree = computed(() => skills.value)
 export const userProgress = computed(() => progress.value)
 export const apiUnavailableState = computed(() => apiUnavailable.value)
+export const sessionExpiredState = computed(() => sessionExpired.value)
 export const isRestoring = computed(() => restoring.value)
 export const isLoggedIn = computed(() => user.value !== null)
 /** 当前训练路径。未登录时恒为 `camp`，与后端默认值一致。 */
@@ -53,7 +58,42 @@ export const trainingMode = computed<TrainingMode>(() => user.value?.training_mo
 
 export function setUser(next: UserSummary | null): void {
   user.value = next
-  if (next) apiUnavailable.value = false
+  if (next) {
+    apiUnavailable.value = false
+    // 拿到有效用户即视为会话正常，「登录已过期」提示该收了。
+    sessionExpired.value = false
+  }
+}
+
+/** 清空所有用户态数据。登出与会话失效共用，避免两处漏清某个字段。 */
+function clearUserState(): void {
+  setToken('')
+  user.value = null
+  checkin.value = null
+  skills.value = null
+  progress.value = null
+}
+
+/**
+ * 服务端判定会话失效时的统一处理。
+ *
+ * 由 `client.ts` 的 401 回调触发（登录/注册接口的 401 已排除，那是「密码错误」）。
+ * 除了清凭据，还要把 `sessionExpired` 置位 —— 否则用户正在答题、突然所有写操作都失败，
+ * 界面却还显示着已登录，完全不知道发生了什么。
+ */
+function handleSessionExpired(): void {
+  // 已经是游客态就不要再提示了（例如未登录用户访问需要登录的接口）。
+  if (!user.value && !getToken()) return
+  console.warn('[ShellQuest] 会话已在服务端失效，退回未登录态')
+  clearUserState()
+  sessionExpired.value = true
+}
+
+// client 不认识 store，由 store 反向注册回调（见 client.ts 的 setSessionExpiredHandler）。
+setSessionExpiredHandler(handleSessionExpired)
+
+export function dismissSessionAlert(): void {
+  sessionExpired.value = false
 }
 
 function reportError(scope: string, error: unknown): void {
@@ -94,7 +134,10 @@ export async function refreshSkills(): Promise<void> {
 }
 
 /**
- * 应用启动时恢复登录态。token 存在但已失效（401）时静默清掉，不打扰用户。
+ * 应用启动时恢复登录态。
+ *
+ * token 存在但已失效（401）时清掉本地凭据并**提示重新登录** —— 早期版本是静默清掉，
+ * 结果是用户重开页面发现自己莫名其妙变成游客，只能自己猜原因。
  */
 export async function restoreSession(): Promise<void> {
   // 没有 token 就别去问 /auth/me —— 那必然是一个 401，会在控制台留下无意义的报错。
@@ -110,8 +153,9 @@ export async function restoreSession(): Promise<void> {
     await loadUserData()
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
-      setToken('')
-      setUser(null)
+      // 正常情况下 client.ts 的全局回调已经处理过了；这里再调一次是为了不依赖回调的
+      // 注册顺序（两次调用是幂等的）。
+      handleSessionExpired()
     } else {
       reportError('恢复登录状态', error)
     }
@@ -137,11 +181,9 @@ export async function authenticate(
 }
 
 export function signOut(): void {
-  setToken('')
-  setUser(null)
-  checkin.value = null
-  skills.value = null
-  progress.value = null
+  clearUserState()
+  // 主动登出不是「过期」，别弹那条提示。
+  sessionExpired.value = false
 }
 
 export async function checkIn(): Promise<CheckInResponse | null> {
