@@ -60,12 +60,12 @@
 ## 1. 项目速览
 
 **ShellQuest** — 面向全栈开发者与架构师的 21 天 Linux 命令实战训练 Web 应用。
-以场景化任务闯关 + 技能树成长 + 命令速查为核心，深色终端风格。
+以场景化任务闯关 + 技能树成长 + 命令速查 + 成就与排行榜为核心，深色终端风格。
 
 - 前端：Vue 3 + TypeScript + Vite + vue-router（无 Pinia、无 UI 组件库，见 §5）
 - 后端：Python 3.13 + FastAPI + SQLAlchemy 2.0（同步 ORM）
 - 数据库：MySQL 8.4（Docker 生产路径）/ SQLite（本地开发默认回退）
-- 缓存：Redis 7 —— **仅在 compose 中声明，代码中完全未使用**
+- 缓存：Redis 7 —— **仅在 compose 中声明，代码中完全未使用**（排行榜刻意走 SQL，见 §4.9）
 - 部署：Docker Compose
 
 文档入口：`README.md`（启动方式）、`REQUIREMENTS.md`（MVP 需求）、`COURSE_DESIGN.md`（21 单元课程设计）。
@@ -103,9 +103,10 @@ uvicorn app.main:app --reload --port 8000
 .venv/Scripts/python scripts/smoke_test.py
 ```
 
-覆盖：课程落库 → 注册 → 判题 → 单元锁拦截 → 进度 → 命令手册载入 → 命令详情/404 →
-关键词检索 → 自然语言检索 → 兜底建议 → 打卡 → 技能树。改完后端接口或检索逻辑后跑一遍，
-比逐个 curl 快。断言里的 `21 / 63 / 614` 是当前数据快照的规模，课程或上游版本变化时要同步改。
+覆盖：课程落库 → 注册 → 错答/判题 → 单元锁拦截 → 进度 → 命令手册载入 → 命令详情/404 →
+关键词检索 → 自然语言检索 → 兜底建议 → 成就目录与解锁 → 连续打卡成就 → 无错通关 → 排行榜 → 技能树。
+改完后端接口或检索逻辑后跑一遍，比逐个 curl 快。断言里的 `21 / 63 / 614 / 22` 是当前数据快照的规模
+（单元 / 题目 / 命令 / 成就），课程、上游版本或成就目录变化时要同步改。
 
 **命令手册验收核查**（在**已导入的真实库**上只读运行，对应 REQUIREMENTS.md 4.4.11）：
 
@@ -182,6 +183,9 @@ backend/
     security.py    # scrypt 口令哈希与校验
     command_search.py  # 命令检索：关键词字段加权 + 自然语言（从课程关卡派生）
     command_seed.py    # 命令落库与离线种子快照的导出/载入
+    achievements/  # 成就：定义与判定逻辑分开（见 §4.9）
+      catalog.py       # 纯数据：22 条成就的 code / title / rule / group
+      __init__.py      # 判定引擎：统计汇总、规则判定、解锁同步
     curriculum/    # 课程内容：21 个单元 / 63 道题，按主题区域分 6 个模块
       __init__.py      # 汇总 6 个区域模块为 UNITS，顺序必须与 ZONE_ORDER 一致
       zone_file.py     # 文件工坊     单元 01–04
@@ -213,6 +217,7 @@ frontend/
     stores/        # 模块级 ref 单例（无 Pinia）
       session.ts   # 登录态、用户、打卡、技能树、进度
       curriculum.ts# /api/v1/units 缓存（按账号失效）
+      achievements.ts # 成就目录缓存 + 「刚刚解锁」提示队列
       ui.ts        # 登录弹窗开合
     utils/
       text.ts      # 课程文案的行内 Markdown 解析（不生成 HTML）
@@ -226,12 +231,15 @@ frontend/
       InlineText.vue      # 渲染含行内代码/粗体的文案（不走 v-html）
       MarkdownBlock.vue   # 渲染块级 Markdown（唯一允许 v-html 的地方）
       CommandCard.vue     # 命令列表项（浏览态与搜索态共用）
+      AchievementToast.vue# 成就解锁提示（右下角，自动消失）
     views/
       HomeView.vue        # 训练营首页
       UnitsView.vue       # 课程地图（6 区域 × 21 单元）
       UnitView.vue        # 单元内逐题作答
       CommandsView.vue    # 命令速查：浏览 / 筛选 / 搜索 / 分页
       CommandDetailView.vue # 命令详情：章节 / 选项 / 实例 / 关联任务
+      AchievementsView.vue  # 成就徽章墙（4 组 / 解锁态 / 进度）
+      LeaderboardView.vue   # 公开排行榜
       NotFoundView.vue    # 404
     styles.css     # 全局样式（深色终端风）
   index.html
@@ -299,9 +307,11 @@ X-Session-Token: <token>
 | `quest_options` | `choice` / `judge` 题型的选项 | `(quest_id, key)` 唯一 |
 | `quest_commands` | 题目 ↔ 命令名的关联，供命令查询双向跳转 | `(quest_id, command_name)` 唯一 |
 | `quest_completions` | 完成记录 | `(user_id, quest_id)` 唯一 |
+| `quest_attempts` | 每次作答的对错，供「无错通关」成就判定 | `(user_id, quest_id)` 可多条 |
 | `user_sessions` | 登录会话 | `token` 唯一 |
 | `check_ins` | 每日打卡 | `(user_id, checkin_date)` 唯一 |
 | `skill_progress` | 技能节点点亮，**绑定课程单元** | `(user_id, unit_id)` 唯一 |
+| `user_achievements` | 已解锁的成就，`code` 对应成就目录 | `(user_id, code)` 唯一 |
 | `commands` | 命令手册条目（614 条），含原文全文与结构化字段 | `name` 唯一，`content_hash` 用于幂等导入 |
 | `command_tags` | 命令的功能标签 | `(command_id, tag)` 唯一 |
 
@@ -488,6 +498,49 @@ SUGGEST_TERM_TOPK = 6        # 每个词元只取最强的 6 条候选
 真正的排序由 `score_command()` 逐字段打分完成。不要用 `search_text` 的位置做相关性判断 ——
 它的拼接顺序（名称 → 简介 → 分类 → 标签 → 选项 → 正文）与权重无关。
 
+### 4.9 成就与排行榜（`app/achievements/`）
+
+对应 `REQUIREMENTS.md` §4.3 / §4.5。**成就定义与判定逻辑分开**，与课程内容同一个思路：
+
+| 文件 | 职责 |
+| --- | --- |
+| `achievements/catalog.py` | **纯数据**：22 条成就的 `code` / `title` / `description` / `icon` / `group` / `rule` |
+| `achievements/__init__.py` | 判定引擎：`collect_stats` / `is_satisfied` / `progress_of` / `sync_achievements` |
+
+4 个分组（`GROUP_ORDER`，前端按此顺序展示）：**坚持**（连续打卡，3 条）/ **通关**（单元与区域，11 条）/
+**无错**（首答即正确，3 条）/ **成长**（经验与等级，5 条）。
+
+`rule` 有 7 种取值，与 `is_satisfied()` 一一对应：`streak` / `units_cleared` / `zone_clear` /
+`zones_cleared` / `perfect_units` / `xp` / `level`。**新增规则要同时改这两处**，否则判定恒为 `False`。
+
+**判定是「写路径上全量重算」，不是增量打点。**
+
+- 触发点只有两个：`submit_quest()` 与 `perform_checkin()`（都必须在**写库之后**调用，
+  否则统计读到的是旧数据）。
+- 每次重算用户的全部统计量（几条聚合查询 + 一次内存遍历），再解锁所有「已满足但未记录」的成就。
+  二十几条规则下这比维护「某个事件是否刚好触发某条规则」的增量逻辑更不容易出错。
+- **幂等**：只依赖 `user_achievements` 里已有的 `code`，重复调用不会重复解锁
+  （表上还有 `(user_id, code)` 唯一约束兜底）。
+- **只增不减**：连续打卡断掉后 `streak_days` 归零，但已拿到的徽章不收回。
+
+⚠️ **`code` 是持久化标识，一旦发布就不要再改** —— 改名会让用户的历史解锁记录失联。
+
+**「无错通关」依赖 `quest_attempts`，且只在题目尚未完成时写入。** 完成之后的重复提交属于练习，
+不应追溯破坏此前的无错记录。因此「这道题答错过吗」= 该题是否存在 `correct=False` 的记录；
+单元的 perfect 判定 = 单元内全部题目已完成 **且** 没有任何一题答错过。
+
+**排行榜走 SQL 聚合，不接 Redis**（2026-09 决策）。`ORDER BY xp DESC, streak_days DESC, id ASC`，
+`_rank_of()` 用同一套比较条件算全量名次，保证列表名次与「我的名次」口径一致。
+需求 §7 把 Redis 列为「缓存/排行榜/会话」，但 MVP 规模下 SQL 毫秒级返回，
+引入 Redis 会多出第二份真相与一个硬依赖（本地开发必须起 Redis 才能跑）。**确有性能需求时再接入。**
+
+排行榜**只暴露** `rank` / `username` / `level` / `level_title` / `xp` / `streak_days` / `is_me`，
+**不含邮箱与答题详情**（§4.5 明确要求）。`GET /api/v1/leaderboard` 是**公开接口**（用 `get_optional_user`），
+登录用户额外拿到 `me`，这样即使排在 `limit` 之外也能看到自己的名次。
+
+**老用户补发**：`user_achievements` 是后加的表，老用户的进度都在、成就记录却是空的。
+`backfill_achievements()` 在启动时只在「有用户、但一条成就记录都没有」的情况下跑一次，之后启动不再付出代价。
+
 ---
 
 ## 5. 前端约定
@@ -535,9 +588,15 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 | --- | --- |
 | `session.ts` | 登录态、用户、打卡、技能树、进度；`restoreSession()` 在 `App.vue` 的 `onMounted` 调用 |
 | `curriculum.ts` | `/api/v1/units` 缓存，按账号失效（换账号自动重拉） |
+| `achievements.ts` | 成就目录缓存 + 作答/打卡带回的「刚刚解锁」提示队列 |
 | `ui.ts` | 登录弹窗开合与模式（任何视图都可能唤起登录） |
 
 组件内部状态用局部 `ref`；只有跨视图共享的才放进 store。
+
+⚠️ **需要 token 的接口不要在 `onMounted` 里直接拉。** 子组件的 `onMounted` 先于 `App.vue` 执行，
+此时 `restoreSession()` 还没跑完、`currentUser` 仍是 `null`，请求会因缺 token 而失败。
+`AchievementsView.vue` 的做法是 `watch([isRestoring, isLoggedIn], ...)`，等会话恢复结束再拉
+（`/api/v1/units` 不需要 token，所以 `curriculum.ts` 没这个问题）。
 
 ### 5.4 降级策略（重要）
 
@@ -705,9 +764,11 @@ RUN pnpm install --frozen-lockfile
 | 改了什么 | 需要做什么 |
 | --- | --- |
 | `models.py` 的**表/列定义** | 必须重建数据库（见上） |
+| `models.py` 中**只新增表**（如 `user_achievements` / `quest_attempts`） | **无需重建**：`create_all` 会自建缺失的表。老用户的成就由 `backfill_achievements()` 在下次启动补发（见 §4.9） |
 | `curriculum/` 的**题目内容** | 重启即可，`seed_curriculum()` 会幂等同步（见 §4.7） |
 | `curriculum/` 中**增删单元/题目**（`order` 位移） | 必须重建数据库，否则历史完成记录错位 |
 | 命令手册内容 | 重跑导入脚本（`--export`）并提交快照；已有库会被幂等更新，无需重建（见 §4.8） |
+| `achievements/catalog.py` 的成就目录 | 重启即可，解锁状态按 `code` 增量补齐；**已发布条目的 `code` 不得改名**（见 §4.9） |
 
 MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB）。
 单条命令的正文最长约 13 KB，目前安全；若上游出现超长文档，需要改用 `MEDIUMTEXT`。
@@ -720,7 +781,11 @@ MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB�
 
 | 需求 | 现状 |
 | --- | --- |
-| 4.3 成就 / 徽章 / 公开排行榜 | 前后端均无实现 |
+| 3 / 5 「自由闯关」模式 | 需求 §3 定义了两种训练路径：「21 天训练营」（按单元循序）与「自由闯关」（从主题地图自由选任务）。**代码里只有前者** —— 没有模式选择入口，登录用户的单元严格串行解锁（`compute_unit_statuses()`），无法跳过前置直接练后面的题。游客可自由浏览所有单元内容，但那是「未登录不记录进度」的副作用，不是自由闯关模式 |
+
+`REQUIREMENTS.md` §4 第一期功能范围（课程 / 题型 / 命令查询 / 成就 / 排行榜）已全部落地。
+**注意 §8 验收标准里还有一条未验证项**：Docker Compose 启动全栈（`docker-compose.yml` 存在，
+但本轮未实际执行验证），见 §2「全栈」。
 
 已补齐、从本表移除的条目：
 
@@ -736,6 +801,10 @@ MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB�
   详情页「课程关联」卡片反向跳回单元（`/commands/ls` → `/units/2` 已浏览器验证）
 - ~~4.4.7 搜索交互（`/` 聚焦、`↑↓` 切换、`Esc` 清空、即时联想）~~ —— 已在 `CommandsView.vue` 落地；
   关键词与自然语言两种模式，无命中时展示 `suggestions` 兜底建议
+- ~~4.3 成就 / 徽章 / 称号~~ —— `app/achievements/` 承载 22 条成就（4 组），在作答与打卡后同步解锁，
+  作答响应回传新解锁项并弹出提示；`AchievementsView.vue` 展示徽章墙与进度
+- ~~4.3 / 4.5 公开排行榜~~ —— `GET /api/v1/leaderboard`（公开，可选登录以返回自己的名次），
+  `LeaderboardView.vue` 展示名次 / 用户 / 等级 / 经验 / 连续打卡，自己那行高亮
 
 其他待改进项：
 
@@ -820,6 +889,10 @@ feat: gitignore
 - [ ] 命令速查的筛选条件 → 是否写进了 URL query（`?q=&mode=&category=&tag=&letter=&page=`）而不是只放组件内 `ref`？URL 是筛选状态的唯一来源，否则刷新 / 分享 / 后退都会丢状态
 - [ ] 改了命令章节切分或详情渲染 → 是否回归了 `curl`（围栏不成对，`sections` 为空）走原文兜底？（见 §7）
 - [ ] 题目答案相关 → 前端是否**只在提交后**才展示答案与「涉及命令」？（提交前展示等于泄题，见 §11）
+- [ ] 改了成就目录或判定规则 → `catalog.py` 的 `rule` 与 `achievements/__init__.py` 的 `is_satisfied()` 是否都改了？（只改一处会静默判 `False`）是否更新了 `smoke_test.py` 的 `EXPECTED_ACHIEVEMENTS`？
+- [ ] 新增成就 → `code` 是否全局唯一、且没有改到已发布的旧 `code`？（见 §4.9）
+- [ ] 改了排行榜字段 → 是否仍**只暴露** `rank` / `username` / `level` / `level_title` / `xp` / `streak_days` / `is_me`？不得带出邮箱或答题详情（见 §4.5）
+- [ ] 需要 token 的新页面 → 是否等 `isRestoring` 结束后再拉数据，而不是在 `onMounted` 里直接请求？（见 §5.3）
 - [ ] 改了后端字段 → 是否同步了 `src/types.ts`？（见 §5.2）
 - [ ] 本次改动涉及的文件，是否都已按 §12.1 同步更新了对应文档？（见 §0.1）
 - [ ] `AGENTS.md` 是否已按 §0.2 同步？若有缺口被补齐，§7 的条目是否已删除？
@@ -865,6 +938,7 @@ feat: gitignore
 | 课程内容（题目、选项、判题规则、命令关联） | `AGENTS.md` §4.4 + §4.7 + `COURSE_DESIGN.md` |
 | 命令手册（导入脚本、分类映射、检索、种子快照） | `AGENTS.md` §2 + §4.8 + `REQUIREMENTS.md` §4.4 |
 | 业务规则（XP、等级、解锁、打卡） | `AGENTS.md` §4.5 |
+| 成就目录、判定规则、排行榜口径 | `AGENTS.md` §4.9 + `REQUIREMENTS.md` §4.3 / §4.5 |
 | 前端工具链与代码质量配置 | `AGENTS.md` §5.6 + `README.md` |
 | 前端目录结构、路由、状态管理、API 封装 | `AGENTS.md` §3 + §5.0–§5.5 |
 | 包管理器与锁文件策略 | `AGENTS.md` §5.7 + `README.md` |

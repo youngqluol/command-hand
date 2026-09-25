@@ -43,6 +43,18 @@ const router = createRouter({
       meta: { title: '命令详情' },
     },
     {
+      path: '/achievements',
+      name: 'achievements',
+      component: () => import('../views/AchievementsView.vue'),
+      meta: { title: '成就' },
+    },
+    {
+      path: '/leaderboard',
+      name: 'leaderboard',
+      component: () => import('../views/LeaderboardView.vue'),
+      meta: { title: '排行榜' },
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'not-found',
       component: () => import('../views/NotFoundView.vue'),

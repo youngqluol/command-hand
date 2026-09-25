@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { isNetworkError, request } from '../api/client'
+import { pushUnlocks } from '../stores/achievements'
 import { applySubmitResult, isLoggedIn } from '../stores/session'
 import { openAuth } from '../stores/ui'
 import type { Quest, QuestKind, SubmitResponse } from '../types'
@@ -86,6 +87,8 @@ async function submit(): Promise<void> {
       body: isTextKind.value ? { answer: textAnswer.value } : { option_keys: pickedKeys.value },
     })
     result.value = payload
+    // 解锁提示要在判对 / 判错两条路径上都处理：答错不加经验，但打卡仍可能推进连续天数。
+    pushUnlocks(payload.achievements)
     if (payload.correct) {
       emit('solved', payload)
       await applySubmitResult(payload.user)

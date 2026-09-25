@@ -120,6 +120,22 @@ class QuestCompletion(Base):
     completed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class QuestAttempt(Base):
+    """每次作答的对错记录，供「无错通关」类成就判定使用。
+
+    只在题目**尚未完成**时写入：完成之后的重复提交属于练习，不应追溯破坏此前的无错记录。
+    因此「这道题有没有答错过」= 该用户在该题上是否存在 correct=False 的记录。
+    """
+
+    __tablename__ = "quest_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    quest_id: Mapped[int] = mapped_column(ForeignKey("quests.id"), index=True)
+    correct: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class UserSession(Base):
     __tablename__ = "user_sessions"
 
@@ -156,6 +172,24 @@ class SkillProgress(Base):
     unit_id: Mapped[int] = mapped_column(ForeignKey("course_units.id"), index=True)
     zone: Mapped[str] = mapped_column(String(64), index=True)
     node_index: Mapped[int] = mapped_column(Integer)
+    unlocked_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class UserAchievement(Base):
+    """已解锁的成就。
+
+    code 对应 app/achievements/catalog.py 里的定义，**一旦发布就不要改**：它是持久化标识，
+    改名会让用户的历史解锁记录失联（见 AGENTS.md §4.9）。
+
+    成就只增不减，所以没有「撤销」路径；重复触发由 (user_id, code) 唯一约束挡住。
+    """
+
+    __tablename__ = "user_achievements"
+    __table_args__ = (UniqueConstraint("user_id", "code", name="uq_user_achievement"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    code: Mapped[str] = mapped_column(String(48), index=True)
     unlocked_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

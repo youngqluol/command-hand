@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 
+import { pushUnlocks } from '../stores/achievements'
 import { checkinStatus, checkIn, displayUser } from '../stores/session'
 import { openAuth } from '../stores/ui'
 
@@ -31,6 +32,7 @@ async function perform(): Promise<void> {
     message.value = '打卡失败，请稍后再试。'
     return
   }
+  pushUnlocks(payload.achievements)
   message.value = payload.already_checked_in
     ? '今天已经打过卡啦，明天再来～'
     : `打卡成功 · +${payload.xp_awarded} XP · 连续 ${payload.status.streak_days} 天`

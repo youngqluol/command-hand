@@ -1671,3 +1671,307 @@ nav button.active {
     text-align: left;
   }
 }
+
+/* --------------------------------------------------------------------------- */
+/* 成就与排行榜（REQUIREMENTS.md §4.3 / §4.5）                                  */
+/* --------------------------------------------------------------------------- */
+
+.achievements-page,
+.leaderboard-page {
+  padding-top: 30px;
+  display: grid;
+  gap: 18px;
+}
+
+.achievement-score {
+  text-align: right;
+  min-width: 190px;
+}
+.achievement-score strong {
+  display: block;
+  font-family: 'DM Mono', monospace;
+  font-size: 30px;
+  line-height: 1.1;
+  color: #88e7a8;
+}
+.achievement-score strong span {
+  color: #4d6157;
+  font-size: 17px;
+}
+.achievement-score small {
+  display: block;
+  margin-top: 3px;
+  color: #6f8a80;
+  font-size: 12px;
+}
+.score-bar {
+  height: 5px;
+  margin-top: 9px;
+  border-radius: 10px;
+  background: #1f2d33;
+  overflow: hidden;
+}
+.score-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #3e8057, #88e7a8);
+  transition: width 0.35s ease;
+}
+
+.login-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+}
+.login-prompt .muted {
+  margin: 0;
+}
+
+.badge-group {
+  padding: 20px 22px;
+}
+.badge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.badge {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px;
+  border: 1px solid #1c2a31;
+  border-radius: 10px;
+  background: rgba(11, 17, 22, 0.6);
+  /* 未解锁的压暗但不隐藏：用户要能看见「还差什么」。 */
+  opacity: 0.55;
+}
+.badge.unlocked {
+  border-color: #3e8057;
+  background: linear-gradient(180deg, rgba(30, 62, 44, 0.5), rgba(11, 17, 22, 0.6));
+  opacity: 1;
+}
+.badge-icon {
+  font-size: 22px;
+  line-height: 1;
+  filter: grayscale(1);
+}
+.badge.unlocked .badge-icon {
+  filter: none;
+}
+.badge-body {
+  flex: 1;
+  min-width: 0;
+}
+.badge-body strong {
+  display: block;
+  font-size: 14px;
+  color: #e8eef2;
+}
+.badge-body small {
+  display: block;
+  margin-top: 3px;
+  color: #6f8a80;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.badge-state {
+  display: block;
+  margin-top: 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  color: #88e7a8;
+}
+.badge-progress {
+  height: 4px;
+  margin-top: 9px;
+  border-radius: 10px;
+  background: #1f2d33;
+  overflow: hidden;
+}
+.badge-progress span {
+  display: block;
+  height: 100%;
+  border-radius: 10px;
+  background: #3e8057;
+}
+
+.leaderboard {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+}
+.leaderboard th,
+.leaderboard td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid #1c2a31;
+  font-size: 13px;
+}
+.leaderboard th {
+  color: #6fa580;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.leaderboard tbody tr:last-child td {
+  border-bottom: none;
+}
+.leaderboard .col-rank {
+  width: 68px;
+  font-family: 'DM Mono', monospace;
+  font-size: 15px;
+  color: #88e7a8;
+}
+.leaderboard .col-level {
+  width: 210px;
+}
+.leaderboard .col-xp {
+  width: 110px;
+  font-family: 'DM Mono', monospace;
+}
+.leaderboard .col-streak {
+  width: 110px;
+  color: #6f8a80;
+}
+.leaderboard tr.me td {
+  background: rgba(62, 128, 87, 0.16);
+}
+.leaderboard tr.me.pinned td {
+  border-top: 2px dashed #2c4a3a;
+}
+.leader-name {
+  font-weight: 500;
+}
+.me-chip {
+  margin-left: 8px;
+  border-color: #88e7a8;
+}
+.leaderboard .muted {
+  margin-left: 8px;
+}
+.login-hint {
+  margin: 0;
+}
+
+/* 成就解锁提示：固定在右下角，自动消失，不遮挡作答区（§6 要求成就「不干扰主学习流程」） */
+.unlock-toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 60;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  width: min(340px, calc(100vw - 32px));
+  padding: 15px 16px;
+  border: 1px solid #3e8057;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #16281f, #0d1519);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+.unlock-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+.unlock-body {
+  flex: 1;
+  min-width: 0;
+}
+.unlock-eyebrow {
+  margin: 0;
+  color: #6fa580;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.unlock-title {
+  margin: 5px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #c8f2d6;
+}
+.unlock-desc {
+  margin: 3px 0 0;
+  color: #8fa79b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.unlock-link {
+  display: inline-block;
+  margin-top: 9px;
+  color: #88e7a8;
+  font-size: 12px;
+  text-decoration: none;
+}
+.unlock-link:hover {
+  text-decoration: underline;
+}
+.unlock-close {
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: #5c7268;
+  font-size: 17px;
+  line-height: 1;
+}
+.unlock-close:hover {
+  color: #88e7a8;
+}
+
+.unlock-enter-active,
+.unlock-leave-active {
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+}
+.unlock-enter-from,
+.unlock-leave-to {
+  opacity: 0;
+  transform: translateY(14px);
+}
+
+@media (max-width: 900px) {
+  .achievement-score {
+    text-align: left;
+    min-width: 0;
+  }
+  .login-prompt {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .badge-group {
+    padding: 17px 15px;
+  }
+  .badge-grid {
+    grid-template-columns: 1fr;
+  }
+  /* 表格在窄屏横向滚动，而不是把列压到读不出来 */
+  .leaderboard-page {
+    overflow-x: auto;
+  }
+  .leaderboard {
+    min-width: 520px;
+  }
+  .leaderboard th,
+  .leaderboard td {
+    padding: 10px 12px;
+  }
+  .unlock-toast {
+    right: 12px;
+    left: 12px;
+    bottom: 12px;
+    width: auto;
+  }
+}

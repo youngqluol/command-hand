@@ -11,10 +11,20 @@ const NAV = [
   { name: 'home', label: '训练营', to: { name: 'home' } },
   { name: 'units', label: '课程地图', to: { name: 'units' } },
   { name: 'commands', label: '命令速查', to: { name: 'commands' } },
+  { name: 'achievements', label: '成就', to: { name: 'achievements' } },
+  { name: 'leaderboard', label: '排行榜', to: { name: 'leaderboard' } },
 ]
 
-// 「单元」属于课程地图这一支，导航上要高亮父级。
-const activeNav = computed(() => (route.name === 'unit' ? 'units' : String(route.name ?? '')))
+// 子路由在导航上要高亮父级：单元属于课程地图，命令详情属于命令速查。
+const PARENT_NAV: Record<string, string> = {
+  unit: 'units',
+  'command-detail': 'commands',
+}
+
+const activeNav = computed(() => {
+  const name = String(route.name ?? '')
+  return PARENT_NAV[name] ?? name
+})
 
 const accountLabel = computed(() => (currentUser.value ? `${currentUser.value.username}@quest` : '登录 / 注册'))
 </script>

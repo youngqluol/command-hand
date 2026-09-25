@@ -14,15 +14,25 @@ import re
 import secrets
 import time
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, selectinload
 
+from .achievements import (
+    ACHIEVEMENTS,
+    GROUP_ORDER,
+    Achievement,
+    UserStats,
+    collect_stats,
+    progress_of,
+    sync_achievements,
+    unlocked_codes,
+)
 from .command_search import (
     PhrasingIndex,
     build_phrasing_index,
@@ -38,14 +48,21 @@ from .models import (
     CommandTag,
     CourseUnit,
     Quest,
+    QuestAttempt,
     QuestCommand,
     QuestCompletion,
     QuestOption,
     SkillProgress,
     User,
+    UserAchievement,
     UserSession,
 )
 from .schemas import (
+    AchievementGroup,
+    AchievementItem,
+    AchievementList,
+    AchievementProgress,
+    AchievementUnlock,
     AuthResponse,
     CheckInResponse,
     CheckInStatus,
@@ -58,6 +75,8 @@ from .schemas import (
     CommandSearchHit,
     CommandSearchResult,
     CommandTagCount,
+    Leaderboard,
+    LeaderboardEntry,
     QuestOptionPublic,
     QuestPublic,
     RegisterRequest,
@@ -70,6 +89,8 @@ from .schemas import (
     UnitSummary,
     UserProgress,
     UserSummary,
+    compute_level,
+    compute_level_title,
 )
 from .security import hash_password, verify_password
 
@@ -463,6 +484,9 @@ def wait_for_db_and_init() -> None:
                 seed_curriculum(db)
                 ensure_commands_seeded(db, COMMAND_SEED_PATH)
                 logger.info("命令手册现有 %d 条记录", command_count(db))
+                backfilled = backfill_achievements(db)
+                if backfilled:
+                    logger.info("为已有用户补发 %d 个成就", backfilled)
             return
         except OperationalError as exc:
             last_error = exc
@@ -885,11 +909,16 @@ def perform_checkin(
     db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> CheckInResponse:
     already_checked, xp_awarded, checkin_status = do_checkin(db, user)
+    # 打卡推进连续天数，可能刚好满足「连续打卡 N 天」类成就。
+    unlocked = sync_achievements(db, user, load_curriculum(db))
+    db.commit()
+    db.refresh(user)
     return CheckInResponse(
         already_checked_in=already_checked,
         xp_awarded=xp_awarded,
         status=checkin_status,
         user=UserSummary.model_validate(user),
+        achievements=[achievement_unlock(item) for item in unlocked],
     )
 
 
@@ -924,6 +953,11 @@ def submit_quest(
     xp_awarded = 0
     unit_completed = False
 
+    # 只在题目尚未完成时记录尝试：完成之后的重复提交属于练习，
+    # 不应该追溯破坏此前的「无错通关」记录（见 models.QuestAttempt）。
+    if not already_completed:
+        db.add(QuestAttempt(user_id=user.id, quest_id=quest.id, correct=correct))
+
     if correct and not already_completed:
         xp_awarded += quest.xp_reward
         user.xp += quest.xp_reward
@@ -944,6 +978,12 @@ def submit_quest(
         ):
             do_checkin(db, user)
 
+    unlocked: list[Achievement] = []
+    if not already_completed:
+        # 成就判定放在写库之后：统计要读到本次已 flush 的完成记录、经验值与尝试记录。
+        # 答错也要判一次 —— 它虽然不加经验，但可能刚好触发不了任何成就，成本很低；
+        # 真正需要它的是「首次作答即正确」之外的规则（例如打卡触发的连续天数）。
+        unlocked = sync_achievements(db, user, units)
         db.commit()
         db.refresh(user)
 
@@ -958,6 +998,163 @@ def submit_quest(
         pitfalls=quest.pitfalls or "",
         safer_alt=quest.safer_alt or "",
         user=UserSummary.model_validate(user),
+        achievements=[achievement_unlock(item) for item in unlocked],
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 成就与排行榜（REQUIREMENTS.md §4.3 / §4.5）
+# --------------------------------------------------------------------------- #
+
+
+def achievement_unlock(item: Achievement) -> AchievementUnlock:
+    return AchievementUnlock(
+        code=item.code,
+        title=item.title,
+        description=item.description,
+        icon=item.icon,
+        group=item.group,
+    )
+
+
+def backfill_achievements(db: Session) -> int:
+    """给「有进度但还没有成就记录」的老用户补一次判定。
+
+    user_achievements 是后加的表：老用户的经验、完成记录都在，成就记录却是空的。
+    只在「有用户、但一条成就记录都没有」时执行，之后启动不再付出代价。
+    返回本次补发的成就总数。
+    """
+    if db.scalar(select(func.count()).select_from(UserAchievement)):
+        return 0
+    users = list(db.scalars(select(User)))
+    if not users:
+        return 0
+    units = load_curriculum(db)
+    total = 0
+    for user in users:
+        total += len(sync_achievements(db, user, units))
+    if total:
+        db.commit()
+    return total
+
+
+def achievement_item(
+    item: Achievement, unlocked: dict[str, datetime | None], stats: UserStats
+) -> AchievementItem:
+    bounds = progress_of(item, stats)
+    unlocked_at = unlocked.get(item.code)
+    return AchievementItem(
+        code=item.code,
+        title=item.title,
+        description=item.description,
+        icon=item.icon,
+        group=item.group,
+        unlocked=item.code in unlocked,
+        unlocked_at=unlocked_at.isoformat() if unlocked_at else None,
+        progress=AchievementProgress(current=bounds[0], target=bounds[1]) if bounds else None,
+    )
+
+
+@app.get("/api/v1/achievements", response_model=AchievementList)
+def list_achievements(
+    db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> AchievementList:
+    """成就目录 + 当前用户的解锁状态与进度。
+
+    只读，不做同步 —— 解锁发生在作答与打卡这两个写路径上（见 submit_quest / perform_checkin）。
+    """
+    units = load_curriculum(db)
+    stats = collect_stats(db, user, units)
+    unlocked = unlocked_codes(db, user)
+
+    groups: list[AchievementGroup] = []
+    total = total_unlocked = 0
+    for group_name in GROUP_ORDER:
+        items = [
+            achievement_item(item, unlocked, stats)
+            for item in ACHIEVEMENTS
+            if item.group == group_name
+        ]
+        group_unlocked = sum(1 for item in items if item.unlocked)
+        groups.append(
+            AchievementGroup(
+                group=group_name,
+                total=len(items),
+                unlocked=group_unlocked,
+                items=items,
+            )
+        )
+        total += len(items)
+        total_unlocked += group_unlocked
+
+    return AchievementList(
+        total=total,
+        unlocked=total_unlocked,
+        unlocked_percent=round(total_unlocked / total * 100, 1) if total else 0.0,
+        groups=groups,
+    )
+
+
+def _leaderboard_order() -> tuple:
+    """排名顺序：经验降序 → 连续打卡降序 → id 升序（保证并列时结果稳定）。"""
+    return (User.xp.desc(), User.streak_days.desc(), User.id.asc())
+
+
+def _rank_of(db: Session, user: User) -> int:
+    """在全量用户中的名次（不是「前 N 名里的位置」），与 _leaderboard_order 保持一致。"""
+    ahead = db.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(
+            or_(
+                User.xp > user.xp,
+                and_(User.xp == user.xp, User.streak_days > user.streak_days),
+                and_(
+                    User.xp == user.xp,
+                    User.streak_days == user.streak_days,
+                    User.id < user.id,
+                ),
+            )
+        )
+    )
+    return int(ahead or 0) + 1
+
+
+def _leaderboard_entry(user: User, rank: int, me_id: int | None) -> LeaderboardEntry:
+    return LeaderboardEntry(
+        rank=rank,
+        username=user.username,
+        level=compute_level(user.xp),
+        level_title=compute_level_title(compute_level(user.xp)),
+        xp=user.xp,
+        streak_days=user.streak_days,
+        is_me=me_id is not None and user.id == me_id,
+    )
+
+
+@app.get("/api/v1/leaderboard", response_model=Leaderboard)
+def get_leaderboard(
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+) -> Leaderboard:
+    """公开排行榜，无需登录。
+
+    只暴露用户名 / 等级 / 经验 / 连续打卡，不含邮箱与答题详情（见 REQUIREMENTS.md §4.5）。
+    登录用户额外拿到 `me`，这样即使自己排在 limit 之外也能看到名次。
+    """
+    total_users = db.scalar(select(func.count()).select_from(User)) or 0
+    rows = list(db.scalars(select(User).order_by(*_leaderboard_order()).limit(limit)))
+    me_id = user.id if user else None
+
+    me_entry = None
+    if user is not None:
+        me_entry = _leaderboard_entry(user, _rank_of(db, user), me_id)
+
+    return Leaderboard(
+        total_users=total_users,
+        entries=[_leaderboard_entry(row, index, me_id) for index, row in enumerate(rows, start=1)],
+        me=me_entry,
     )
 
 

@@ -3,6 +3,7 @@ import { onMounted } from 'vue'
 import { RouterView } from 'vue-router'
 
 import { apiPrefix } from './api/client'
+import AchievementToast from './components/AchievementToast.vue'
 import AuthModal from './components/AuthModal.vue'
 import TopBar from './components/TopBar.vue'
 import { apiUnavailableState, dismissApiAlert, restoreSession } from './stores/session'
@@ -31,5 +32,6 @@ onMounted(restoreSession)
     </RouterView>
 
     <AuthModal />
+    <AchievementToast />
   </main>
 </template>

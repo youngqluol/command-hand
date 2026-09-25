@@ -1,6 +1,6 @@
 # ShellQuest
 
-面向全栈开发者与架构师的 Linux 实战训练场：场景化任务、技能树成长与命令速查。
+面向全栈开发者与架构师的 Linux 实战训练场：场景化任务、技能树成长、命令速查、成就与公开排行榜。
 
 ## 本地启动
 
@@ -70,6 +70,21 @@ uvicorn app.main:app --reload --port 8000
 > 需要先删除 `backend/shellquest.db` 再启动。详见 `AGENTS.md` §6。
 
 访问 `http://localhost:5173`，API 文档位于 `http://localhost:8000/docs`。
+
+## 页面与接口一览
+
+前端路由（全部为 history 模式，URL 可分享、可刷新）：
+
+| 路由 | 页面 |
+| --- | --- |
+| `/` | 训练营首页（进度卡 + 技能树 + 当前任务） |
+| `/units`、`/units/:id` | 课程地图（6 区域 × 21 单元）、单元内逐题作答 |
+| `/commands`、`/commands/:name` | 命令速查（A–Z / 分类 / 标签 / 关键词 / 自然语言）、命令详情 |
+| `/achievements` | 成就徽章墙（4 组 / 解锁态 / 进度） |
+| `/leaderboard` | 公开排行榜 |
+
+后端接口全部挂在 `/api/v1` 下。除 `GET /api/v1/leaderboard`（公开）与 `GET /api/v1/commands*`（公开）外，
+其余接口都需要 `X-Session-Token` 请求头。完整清单见 `AGENTS.md` §2。
 
 ## Docker 部署
 

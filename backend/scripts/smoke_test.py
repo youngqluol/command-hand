@@ -15,6 +15,7 @@ import os
 import sys
 import tempfile
 import time
+from datetime import date, timedelta
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -27,13 +28,17 @@ os.unlink(_DB_PATH)  # 让 SQLAlchemy 自己建文件，避免 mkstemp 留下的
 os.environ["DATABASE_URL"] = f"sqlite:///{_DB_PATH}"
 
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
-from app.database import engine  # noqa: E402
+from app.achievements import ACHIEVEMENTS  # noqa: E402
+from app.database import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models import CheckIn, CourseUnit, Quest, User  # noqa: E402
 
 EXPECTED_UNITS = 21
 EXPECTED_QUESTS = 63
 EXPECTED_COMMANDS = 614
+EXPECTED_ACHIEVEMENTS = 22
 
 _failures: list[str] = []
 
@@ -44,6 +49,26 @@ def check(label: str, passed: bool, detail: str = "") -> None:
     print(f"[{mark}] {label}{(' ' + detail) if detail else ''}")
     if not passed:
         _failures.append(label)
+
+
+def correct_payload(quest: Quest) -> dict:
+    """从库里读出这道题的正确答案，避免把 63 道题的答案写死在测试里。
+
+    课程内容由 curriculum/ 定义，这里只是把「标准答案」按判题接口的入参形状回填。
+    """
+    if quest.kind in {"choice", "judge"}:
+        return {"option_keys": [option.key for option in quest.options if option.is_correct]}
+    return {"answer": quest.answer_display}
+
+
+def unlocked_codes(client: TestClient, headers: dict[str, str]) -> set[str]:
+    payload = client.get("/api/v1/achievements", headers=headers).json()
+    return {
+        item["code"]
+        for group in payload["groups"]
+        for item in group["items"]
+        if item["unlocked"]
+    }
 
 
 def main() -> int:
@@ -66,6 +91,18 @@ def main() -> int:
 
         # --- 判题与解锁 ---------------------------------------------------- #
         first_quest = units[0]["quests"][0]
+        # 先故意答错一次：后面用它验证「答错过就不算无错通关」。
+        missed = client.post(
+            f"/api/v1/quests/{first_quest['id']}/submit",
+            headers=headers,
+            json={"answer": "zzz-definitely-not-a-real-answer"},
+        ).json()
+        check(
+            "错答判负",
+            not missed["correct"] and missed["xp_awarded"] == 0,
+            f"correct={missed['correct']} +{missed['xp_awarded']}XP",
+        )
+
         submitted = client.post(
             f"/api/v1/quests/{first_quest['id']}/submit",
             headers=headers,
@@ -127,15 +164,124 @@ def main() -> int:
         )
         check("兜底建议", len(natural["suggestions"]) > 0, str(natural["suggestions"][:5]))
 
-        # --- 打卡与技能树 -------------------------------------------------- #
+        # --- 成就目录 ------------------------------------------------------ #
+        catalog = client.get("/api/v1/achievements", headers=headers).json()
+        check(
+            "成就目录",
+            catalog["total"] == EXPECTED_ACHIEVEMENTS and catalog["unlocked"] == 0,
+            f"{catalog['unlocked']}/{catalog['total']} 已解锁",
+        )
+        check(
+            "成就需登录",
+            client.get("/api/v1/achievements").status_code == 401,
+            "未带 token 应 401",
+        )
+        check(
+            "成就带进度",
+            any(item["progress"] for group in catalog["groups"] for item in group["items"]),
+            "至少一条成就应带 progress",
+        )
+
+        # --- 完成第 1 个单元：通关类与无错类成就 ---------------------------- #
+        with SessionLocal() as db:
+            unit_one = db.scalar(select(CourseUnit).where(CourseUnit.order == 1))
+            unit_one_payloads = [(q.id, correct_payload(q)) for q in unit_one.quests]
+        last: dict = {}
+        for quest_id, payload in unit_one_payloads:
+            last = client.post(
+                f"/api/v1/quests/{quest_id}/submit", headers=headers, json=payload
+            ).json()
+
+        check("单元完成", last.get("unit_completed") is True, f"unit_completed={last.get('unit_completed')}")
+        codes = unlocked_codes(client, headers)
+        check("解锁「破冰」", "unit_first" in codes, f"已解锁 {sorted(codes)}")
+        # 第 1 题先答错过，所以这个单元不能算无错通关。
+        check("答错过不算无错", "perfect_unit" not in codes, "perfect_unit 不应解锁")
+        check(
+            "作答响应回传新成就",
+            "unit_first" in {item["code"] for item in last.get("achievements", [])},
+            str([item["code"] for item in last.get("achievements", [])]),
+        )
+
+        # --- 打卡与连续天数成就 -------------------------------------------- #
         checkin = client.get("/api/v1/checkin/status", headers=headers).json()
         check("打卡状态", "today_checked_in" in checkin, f"today={checkin['today_checked_in']}")
+
+        with SessionLocal() as db:
+            # 造出「昨天打过卡、已连续 2 天」的状态，再打今天的卡 → 连续 3 天。
+            # 删掉打卡记录时要把那部分经验一并退回，否则后面的排行榜断言会被测试数据带偏。
+            user_row = db.scalar(select(User).where(User.username == "smoke"))
+            user_row.streak_days = 2
+            user_row.last_checkin_date = date.today() - timedelta(days=1)
+            for row in list(db.scalars(select(CheckIn).where(CheckIn.user_id == user_row.id))):
+                user_row.xp -= row.xp_awarded
+                db.delete(row)
+            db.commit()
+
+        checked = client.post("/api/v1/checkin", headers=headers).json()
+        check(
+            "打卡连续天数",
+            checked["status"]["streak_days"] == 3,
+            f"streak={checked['status']['streak_days']}",
+        )
+        check(
+            "解锁「三日不辍」",
+            "streak_3" in {item["code"] for item in checked["achievements"]},
+            str([item["code"] for item in checked["achievements"]]),
+        )
 
         skills = client.get("/api/v1/user/skills", headers=headers).json()
         check(
             "技能树",
             skills["total_nodes"] == EXPECTED_UNITS,
             f"{skills['unlocked_nodes']}/{skills['total_nodes']}",
+        )
+
+        # --- 另一个用户全程首答正确 → 应解锁无错通关 ------------------------ #
+        registered2 = client.post(
+            "/api/v1/auth/register", json={"username": "smoke2", "password": "password123"}
+        ).json()
+        headers2 = {"X-Session-Token": registered2["token"]}
+        with SessionLocal() as db:
+            first_two = list(db.scalars(select(CourseUnit).where(CourseUnit.order <= 2)))
+            first_two_payloads = [(q.id, correct_payload(q)) for unit in first_two for q in unit.quests]
+        for quest_id, payload in first_two_payloads:
+            client.post(f"/api/v1/quests/{quest_id}/submit", headers=headers2, json=payload)
+
+        codes2 = unlocked_codes(client, headers2)
+        check(
+            "首答全对解锁无错通关",
+            {"unit_first", "perfect_unit"} <= codes2,
+            f"已解锁 {sorted(codes2)}",
+        )
+
+        # --- 排行榜 -------------------------------------------------------- #
+        board = client.get("/api/v1/leaderboard").json()
+        check(
+            "排行榜公开可读",
+            board["total_users"] == 2 and len(board["entries"]) == 2,
+            f"{board['total_users']} 名用户 / {len(board['entries'])} 条",
+        )
+        xps = [entry["xp"] for entry in board["entries"]]
+        check("排行榜按经验降序", xps == sorted(xps, reverse=True), str(xps))
+        check(
+            "排行榜名次连续",
+            [entry["rank"] for entry in board["entries"]] == [1, 2],
+            str([entry["rank"] for entry in board["entries"]]),
+        )
+        mine = client.get("/api/v1/leaderboard", headers=headers2).json()["me"]
+        check(
+            "排行榜返回自己的名次",
+            mine is not None and mine["is_me"] and mine["rank"] == 1,
+            f"me={mine}",
+        )
+        check(
+            "排行榜不泄露私密字段",
+            all(
+                set(entry) == {"rank", "username", "level", "level_title", "xp", "streak_days", "is_me"}
+                for entry in board["entries"]
+            ),
+            str(sorted(board["entries"][0])),
         )
 
     if _failures:

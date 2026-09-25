@@ -77,6 +77,8 @@ export type SubmitResponse = {
   pitfalls: string
   safer_alt: string
   user: UserSummary
+  /** 本次作答新解锁的成就，可能为空 */
+  achievements: AchievementUnlock[]
 }
 
 export type UserProgress = {
@@ -102,6 +104,8 @@ export type CheckInResponse = {
   xp_awarded: number
   status: CheckInStatus
   user: UserSummary
+  /** 本次打卡新解锁的成就，可能为空 */
+  achievements: AchievementUnlock[]
 }
 
 export type SkillNode = {
@@ -126,6 +130,67 @@ export type SkillTree = {
   unlocked_nodes: number
   total_percent: number
   zones: SkillZone[]
+}
+
+// --------------------------------------------------------------------------- //
+// 成就与排行榜（REQUIREMENTS.md §4.3 / §4.5）
+// --------------------------------------------------------------------------- //
+
+/** 作答 / 打卡响应里回传的新解锁成就，用于弹提示。 */
+export type AchievementUnlock = {
+  code: string
+  title: string
+  description: string
+  icon: string
+  group: string
+}
+
+export type AchievementProgress = {
+  current: number
+  target: number
+}
+
+export type AchievementItem = {
+  code: string
+  title: string
+  description: string
+  icon: string
+  group: string
+  unlocked: boolean
+  unlocked_at: string | null
+  /** 无法量化的规则为 null */
+  progress: AchievementProgress | null
+}
+
+export type AchievementGroup = {
+  group: string
+  total: number
+  unlocked: number
+  items: AchievementItem[]
+}
+
+export type AchievementList = {
+  total: number
+  unlocked: number
+  unlocked_percent: number
+  groups: AchievementGroup[]
+}
+
+export type LeaderboardEntry = {
+  rank: number
+  username: string
+  level: number
+  level_title: string
+  xp: number
+  streak_days: number
+  is_me: boolean
+}
+
+export type Leaderboard = {
+  total_users: number
+  entries: LeaderboardEntry[]
+  /** 未登录时为 null */
+  me: LeaderboardEntry | null
 }
 
 // --------------------------------------------------------------------------- //

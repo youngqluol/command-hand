@@ -151,6 +151,7 @@ class SubmitResponse(BaseModel):
     pitfalls: str
     safer_alt: str
     user: UserSummary
+    achievements: list["AchievementUnlock"] = []
 
 
 class UserProgress(BaseModel):
@@ -181,6 +182,7 @@ class CheckInResponse(BaseModel):
     xp_awarded: int
     status: CheckInStatus
     user: UserSummary
+    achievements: list["AchievementUnlock"] = []
 
 
 # --------------------------------------------------------------------------- #
@@ -210,6 +212,69 @@ class SkillTree(BaseModel):
     unlocked_nodes: int
     total_percent: float
     zones: list[SkillZone]
+
+
+# --------------------------------------------------------------------------- #
+# 成就与排行榜（REQUIREMENTS.md §4.3 / §4.5）
+# --------------------------------------------------------------------------- #
+
+
+class AchievementUnlock(BaseModel):
+    """作答 / 打卡响应里回传的**新解锁**成就，供前端弹提示。"""
+
+    code: str
+    title: str
+    description: str
+    icon: str
+    group: str
+
+
+class AchievementProgress(BaseModel):
+    current: int
+    target: int
+
+
+class AchievementItem(BaseModel):
+    code: str
+    title: str
+    description: str
+    icon: str
+    group: str
+    unlocked: bool
+    unlocked_at: str | None = None
+    progress: AchievementProgress | None = None
+
+
+class AchievementGroup(BaseModel):
+    group: str
+    total: int
+    unlocked: int
+    items: list[AchievementItem]
+
+
+class AchievementList(BaseModel):
+    total: int
+    unlocked: int
+    unlocked_percent: float
+    groups: list[AchievementGroup]
+
+
+class LeaderboardEntry(BaseModel):
+    """排行榜条目。只暴露用户名 / 等级 / 经验 / 连续打卡，不含邮箱与答题详情（见 §4.5）。"""
+
+    rank: int
+    username: str
+    level: int
+    level_title: str
+    xp: int
+    streak_days: int
+    is_me: bool = False
+
+
+class Leaderboard(BaseModel):
+    total_users: int
+    entries: list[LeaderboardEntry]
+    me: LeaderboardEntry | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -319,3 +384,9 @@ class CommandSearchResult(BaseModel):
     total: int
     hits: list[CommandSearchHit]
     suggestions: list[str] = []
+
+
+# SubmitResponse / CheckInResponse 引用了下方才定义的 AchievementUnlock（前向引用），
+# 必须在文件末尾重建一次，否则 Pydantic 在首次使用时才报解析失败。
+SubmitResponse.model_rebuild()
+CheckInResponse.model_rebuild()
