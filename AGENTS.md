@@ -171,15 +171,8 @@ docker compose up -d --build  # 前端 :8080，后端 :8000，MySQL :3306，Redi
 docker compose ps             # 4 个服务都应为 running/healthy
 ```
 
-⚠️ **本条路径从未实测过**（开发全程用 SQLite + Vite，开发机未装 Docker，见 §7）。
-首次在真机上跑时重点看这几处 —— 都是「换数据库引擎 / 换构建环境」才可能暴露的问题：
-
-| 关注点 | 期望 |
-| --- | --- |
-| MySQL 建表 | `users.training_mode` 等 13 张表全部建出；`String` 列都有长度，不应报 `VARCHAR requires a length` |
-| 课程与命令落库 | 启动日志出现「命令手册现有 614 条记录」 |
-| 健康检查 | `curl 127.0.0.1:8000/health` → `{"status":"ok",...}`；这是 `depends_on: service_healthy` 的依据 |
-| 同源反代 | 浏览器只访问 `:8080`，nginx 把 `/api/` 转到 `backend:8000`，因此**不产生跨域预检** |
+**已在真机实测通过**（2 核 / 1.8GB 内存 / x86_64，构建 87 秒）。部署检查清单、运维坑
+与待处理的端口暴露问题见 §7。
 
 ---
 
@@ -820,24 +813,92 @@ RUN pnpm install --frozen-lockfile
 MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB）。
 单条命令的正文最长约 13 KB，目前安全；若上游出现超长文档，需要改用 `MEDIUMTEXT`。
 
+**外键都没有 `ON DELETE CASCADE`。** 6 张表（`check_ins` / `quest_attempts` /
+`quest_completions` / `skill_progress` / `user_achievements` / `user_sessions`）引用 `users.id`，
+所以**删用户必须先按顺序清掉子表**，否则报 `ERROR 1451 Cannot delete or update a parent row`：
+
+```sql
+DELETE FROM user_achievements WHERE user_id = ?;
+DELETE FROM quest_attempts    WHERE user_id = ?;
+DELETE FROM quest_completions WHERE user_id = ?;
+DELETE FROM check_ins         WHERE user_id = ?;
+DELETE FROM skill_progress    WHERE user_id = ?;
+DELETE FROM user_sessions     WHERE user_id = ?;
+DELETE FROM users             WHERE id = ?;
+```
+
+这是刻意的（不级联 = 不会误删历史数据），但清理测试数据时容易踩。**改外键行为属于架构级变更，先确认。**
+
 ---
 
 ## 7. 已知缺口（不要误以为已实现）
 
 以下功能在 `REQUIREMENTS.md` 中有定义，但**代码中尚未实现**：
 
-**（功能缺口已清零）** —— `REQUIREMENTS.md` §3 训练路径与 §4 第一期功能范围（课程 / 题型 /
-命令查询 / 成就 / 排行榜）均已全部落地，`backend/scripts/smoke_test.py` 的 37 条断言全绿。
+**（缺口已清零）** —— `REQUIREMENTS.md` §3 训练路径与 §4 第一期功能范围（课程 / 题型 /
+命令查询 / 成就 / 排行榜）均已全部落地，且 **§8 验收标准已全部满足**：
 
-**但 §8 验收标准里还有一条未验证项**：Docker Compose 启动全栈（`docker-compose.yml` 存在，
-但本机**未安装 Docker**（`docker: command not found`），本轮未实际执行验证），见 §2「全栈」。
-**这是唯一一处「写了但没跑过」的东西**，具备 Docker 环境后应补做。
+- `backend/scripts/smoke_test.py` 37 条断言全绿（临时 SQLite）
+- `backend/scripts/verify_commands.py` 覆盖 4.4.11 全部条目（真实库只读）
+- **Docker Compose 全栈已在真机（阿里云 / x86_64 / 2 核 / 1.8GB 内存）实测通过**：
+  构建 87 秒、4 个容器 25 秒内全部就绪、MySQL 13 张表 + 21 单元 + 63 题 + 614 条命令落库，
+  浏览器端到端零控制台错误。**这是本项目第一次在 MySQL 上跑通**（此前全是 SQLite）。
+
+### 真机部署的实测结论
+
+记录这些是因为「换数据库引擎 + 换构建环境」才会暴露，本地复现不了。
+
+| 项 | 结论 |
+| --- | --- |
+| 资源下限 | 2 核 / 1.8GB 内存 / 1GB swap **够用**：构建 87 秒无 OOM，运行时 4 容器合计约 520MB（MySQL 444 + backend 70 + redis 5 + nginx 3） |
+| 构建前先停容器 | 内存紧张时先 `docker compose down`（保留卷）再 `build`，把内存让给前端 `vite build` |
+| MySQL 兼容性 | 13 张表全部建出；`String` 列都带长度，未触发 `VARCHAR requires a length`；`utf8mb4_unicode_ci` 中文无乱码 |
+| 表结构升级 | **`create_all` 只建缺失的表、不改已有表**。跨版本升级（本项目曾从 6 张表跳到 13 张）必须重建卷或手工 `ALTER`，见 §6 |
+| 数据持久化 | `docker compose restart` 后用户数据与 614 条命令均无损，`seed_curriculum()` 幂等跳过（日志「课程内容与数据库一致，无需变更」） |
+
+### 运维坑（踩过的）
+
+- **`mysql` CLI 在非 TTY 下默认不是 utf8mb4**，直接 `docker exec ... mysql -e "SELECT zone ..."`
+  中文会显示成 `???`。**数据本身没问题**（`HEX(zone)` 是正确 UTF-8 字节），加
+  `--default-character-set=utf8mb4` 即可正常显示。**排查中文乱码时先分清是「存储坏了」还是「显示坏了」。**
+- **删除用户要手工按顺序清子表**：6 张表（`check_ins` / `quest_attempts` / `quest_completions` /
+  `skill_progress` / `user_achievements` / `user_sessions`）的外键都**没有 `ON DELETE CASCADE`**，
+  直接 `DELETE FROM users` 会报 `ERROR 1451`。先删子表再删 `users`。
+- **`docker compose down -v` 会删掉 MySQL 卷**。重建前务必先 `mysqldump`（见下方「备份」）。
+
+### 部署检查清单
+
+```bash
+docker compose ps                                  # 4 个服务应 running / healthy
+docker compose logs backend | grep 命令手册          # 期望「命令手册现有 614 条记录」
+curl -s localhost:8000/health                      # {"status":"ok",...}
+curl -s localhost:8000/api/v1/units | head -c 200   # 21 个单元的 JSON
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/
+```
+
+**备份**（`down -v` 之前必做）：
+
+```bash
+RP=$(grep MYSQL_ROOT_PASSWORD .env | cut -d= -f2-)
+docker exec <mysql容器> sh -c "exec mysqldump -uroot -p'$RP' --single-transaction --databases <库名>" \
+  | gzip > /root/backup-$(date +%Y%m%d-%H%M%S).sql.gz
+```
+
+### 待处理：端口暴露（安全问题）
+
+`docker-compose.yml` 把 `mysql`(3306) 与 `redis`(6379) 映射成 `0.0.0.0:...`，
+**云主机上等于对公网开放**。实测 Redis **完全无认证**（匿名 `INFO server` 直接返回数据），
+MySQL 也只需弱口令 —— 开放 Redis 是常见的挖矿/勒索入口。
+后端通过 Docker 内网 DNS（`mysql:3306` / `redis:6379`）访问，**宿主机端口映射对应用并非必需**。
+建议改为只绑本地：`"127.0.0.1:3306:3306"` / `"127.0.0.1:6379:6379"`，或直接去掉 `ports`。
+**需与维护者确认是否有从宿主机外部连库的用法后再改。**
 
 已补齐、从缺口表移除的条目：
 
+- ~~Docker Compose 启动全栈~~ —— 已在真机实测通过（见上）
 - ~~3 / 5 「自由闯关」模式~~ —— `User.training_mode` + `POST /api/v1/user/mode` 已实现两种训练路径，
   `compute_unit_statuses()` 按模式决定是否上锁；`TrainingModeSwitch.vue` 提供切换入口，
-  `UnitsView.vue` 把 `available` 渲染为可点击的「可挑战」卡片（浏览器已验证 camp ⇄ free 往返）
+  `UnitsView.vue` 把 `available` 渲染为可点击的「可挑战」卡片（本地 + 真机均已验证 camp ⇄ free 往返）
 - ~~4.1.1 场景化出题~~ —— 已由 `CourseUnit` / `Quest` / `QuestOption` 三层模型 + `curriculum/` 承载
 - ~~4.2 多种练习题型~~ —— 后端已支持 `terminal` / `fill` / `choice` / `judge` 四种题型与 5 种判题器
 - ~~4.2 四种题型的前端交互~~ —— `QuestionPane.vue` 已按 `kind` 分派：文本作答（terminal / fill）+ 选项作答（choice / judge），并渲染 `expected_display` / `explanation` / `pitfalls` / `safer_alt`
@@ -949,6 +1010,11 @@ feat: gitignore
 - [ ] 改了训练路径 → `TRAINING_MODES`（`main.py`）、`TrainingMode`（`schemas.py` + `types.ts`）、
   `compute_unit_statuses()` 的分支、`TrainingModeSwitch.vue` 的 `MODES` 是否五处一致？是否跑过 `smoke_test.py` 的训练路径断言？
 - [ ] 新增全局 CSS 类名 → 是否与 `styles.css` 里已有类重名？（同名会静默覆盖，移动端才暴露，见 §5.5）
+- [ ] 改了 `models.py` 的表/列 → 目标环境是**已有数据的库**吗？`create_all` 不会改已有表，
+  跨版本升级必须重建卷或手工 `ALTER`（见 §6、§7）
+- [ ] 改了 `docker-compose.yml` 的 `ports` → 公网服务器上 MySQL / Redis 是否仍绑在 `0.0.0.0`？
+  后端走 Docker 内网访问，宿主机端口映射并非必需（见 §7）
+- [ ] 部署相关改动 → 是否在真机跑过 `docker compose up -d --build` 并按 §7 的检查清单核对？
 - [ ] 本次改动涉及的文件，是否都已按 §12.1 同步更新了对应文档？（见 §0.1）
 - [ ] `AGENTS.md` 是否已按 §0.2 同步？若有缺口被补齐，§7 的条目是否已删除？
 - [ ] 新增依赖 → 是否写入了 `requirements.txt` 或 `package.json`？
@@ -986,6 +1052,7 @@ feat: gitignore
 | 变更 | 必须更新 |
 | --- | --- |
 | 启动方式、端口、环境变量、依赖 | `README.md` |
+| 部署（Compose / 真机结论 / 运维坑 / 端口暴露） | `AGENTS.md` §2 + §7 + `README.md` |
 | 功能范围、接口行为、验收标准 | `REQUIREMENTS.md` |
 | 课程单元、主题区域、题型配比 | `COURSE_DESIGN.md` |
 | 目录结构、架构、约定、命令、已知缺口 | `AGENTS.md`（本文件） |

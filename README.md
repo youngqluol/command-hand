@@ -97,16 +97,21 @@ uvicorn app.main:app --reload --port 8000
 
 ## Docker 部署
 
-Docker Desktop 可用时，在项目根目录执行：
+Docker Desktop / 服务器上，在项目根目录执行：
 
 ```bash
-docker compose up --build
+cp .env.example .env            # 首次：把 CORS_ORIGINS 改成实际访问地址
+docker compose up -d --build
 ```
 
 前端默认运行在 `http://localhost:8080`，API 运行在 `http://localhost:8000`。
 
-> ⚠️ 该路径**尚未实测**：开发全程使用本地 SQLite + Vite，`docker compose up` 未在具备 Docker
-> 的环境中执行过（见 `AGENTS.md` §7）。
+**已在真机实测通过**（x86_64 / 2 核 / 1.8GB 内存）：构建 87 秒，4 个容器 25 秒内全部 healthy，
+MySQL 落库 13 张表 / 21 单元 / 63 题 / 614 条命令。
+
+> ⚠️ 当前 `docker-compose.yml` 把 MySQL(3306) 与 Redis(6379) 映射到了 `0.0.0.0`，
+> 在公网服务器上等于对外开放（实测 Redis 无认证）。**公网部署前请改成只绑 `127.0.0.1`**，
+> 详见 `AGENTS.md` §7。
 
 ## 文档
 
