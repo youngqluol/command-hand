@@ -5,6 +5,10 @@
   background: #090e13;
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-synthesis: none;
+  /* 正文与顶栏内层共用同一宽度，改一处即可（窄屏在 @media 里覆写）。 */
+  --shell-width: min(1180px, calc(100% - 40px));
+  /* 顶栏高度。命令速查的筛选栏、命令详情的侧栏吸顶时要避开它，别再写死 18px。 */
+  --topbar-height: 76px;
 }
 * {
   box-sizing: border-box;
@@ -22,7 +26,7 @@ button {
   cursor: pointer;
 }
 .app-shell {
-  width: min(1180px, calc(100% - 40px));
+  width: var(--shell-width);
   margin: 0 auto;
   padding-bottom: 48px;
 }
@@ -71,12 +75,37 @@ button {
   padding: 0 4px;
   line-height: 1;
 }
+/*
+ * 吸顶顶栏。两层结构：外层 `.topbar` 通栏吸顶并铺毛玻璃底，内层 `.topbar-inner`
+ * 与正文同宽居中 —— 如果只有一层，吸顶背景就只有 1180px 宽，滚动时两侧会漏出内容。
+ *
+ * 未滚动时刻意不加底色，让头部与首屏背景连成一片；滚动超过 4px 由 TopBar.vue 挂
+ * `.is-stuck` 才补上底色与分隔线。
+ *
+ * z-index 必须低于 `.modal-backdrop`(10) 与 `.unlock-toast`(60)，否则弹窗会被顶栏压住。
+ */
 .topbar {
-  height: 76px;
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  border-bottom: 1px solid transparent;
+  transition:
+    background-color 0.22s ease,
+    border-color 0.22s ease;
+}
+.topbar.is-stuck {
+  border-bottom-color: #1e2a31;
+  background: rgba(9, 14, 19, 0.82);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.topbar-inner {
+  width: var(--shell-width);
+  height: var(--topbar-height);
+  margin: 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid #1e2a31;
 }
 .brand,
 nav a,
@@ -143,7 +172,9 @@ nav button.active {
 }
 .dashboard {
   display: grid;
-  grid-template-columns: 1.6fr 0.9fr;
+  /* `minmax(0, 1fr)` 而不是裸 `1fr`：裸 1fr 的轨道最小值是 auto，
+     会被里面的长代码/长单词顶宽，窄屏直接撑出横向滚动条。 */
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.9fr);
   gap: 18px;
   padding-top: 28px;
 }
@@ -437,7 +468,7 @@ nav button.active {
 }
 .quest-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: 18px;
   padding-top: 28px;
 }
@@ -708,17 +739,17 @@ nav button.active {
   font-size: 12px;
 }
 @media (max-width: 720px) {
-  .app-shell {
-    width: min(100% - 24px, 560px);
+  :root {
+    --shell-width: min(100% - 24px, 560px);
   }
   /* 顶栏折成两行：品牌 + 账号在上，导航在下。不要隐藏导航 —— 否则手机上没有入口切页。 */
-  .topbar {
+  .topbar-inner {
     height: auto;
     flex-wrap: wrap;
     row-gap: 2px;
     padding: 10px 0 6px;
   }
-  .topbar nav {
+  .topbar-inner nav {
     order: 3;
     width: 100%;
     gap: 20px;
@@ -733,7 +764,7 @@ nav button.active {
   }
   .dashboard,
   .quest-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     padding-top: 16px;
   }
   .hero-card {
@@ -857,6 +888,30 @@ nav button.active {
   color: #f19493 !important;
   font-size: 12px !important;
   margin: 5px 0 !important;
+}
+.auth-subtitle {
+  margin: 8px 0 0;
+}
+/*
+ * 行内校验提示。这行文案**始终占位**：通过时显示填写要求，失败时被红字顶掉。
+ * 如果用 v-if 才渲染，报错出现/消失会把下面的提交按钮上下顶动 —— 用户正好在
+ * 点「登录」的瞬间按钮跑掉，就会误点。
+ */
+.auth-field-hint {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #6f8a80;
+  transition: color 0.16s ease;
+}
+.auth-field-hint.error {
+  color: #f19493;
+}
+.auth-modal input.invalid {
+  border-color: #a3554f;
+  background: #180f10;
+}
+.auth-modal input.invalid:focus {
+  border-color: #e08a84;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1328,7 +1383,7 @@ nav button.active {
 
 .commands-layout {
   display: grid;
-  grid-template-columns: 235px 1fr;
+  grid-template-columns: 235px minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
@@ -1337,7 +1392,8 @@ nav button.active {
   display: grid;
   gap: 22px;
   position: sticky;
-  top: 18px;
+  /* 让开吸顶顶栏，否则筛选栏会滑到顶栏底下被盖住。 */
+  top: calc(var(--topbar-height) + 18px);
 }
 .filter-group .eyebrow {
   margin-bottom: 11px;
@@ -1526,6 +1582,9 @@ nav button.active {
 .command-detail-page {
   padding-top: 22px;
   display: grid;
+  /* 显式写 minmax(0, 1fr)：默认的单列 auto 轨道会被命令手册里的长代码行顶宽，
+     390px 下整页被撑到 886px（见 AGENTS.md §5.5 的横向溢出说明）。 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
 .breadcrumb {
@@ -1566,9 +1625,14 @@ nav button.active {
 }
 .command-detail-layout {
   display: grid;
-  grid-template-columns: 1fr 290px;
+  grid-template-columns: minmax(0, 1fr) 290px;
   gap: 18px;
   align-items: start;
+}
+.command-body,
+.command-aside {
+  /* 双保险：即使轨道被改成裸 1fr，这两个栅格项也不会被内容顶宽。 */
+  min-width: 0;
 }
 .command-body {
   padding: 26px 28px;
@@ -1660,7 +1724,8 @@ nav button.active {
   display: grid;
   gap: 14px;
   position: sticky;
-  top: 18px;
+  /* 同上：给吸顶顶栏让位。 */
+  top: calc(var(--topbar-height) + 18px);
 }
 .aside-card {
   padding: 18px 17px;
@@ -1708,7 +1773,7 @@ nav button.active {
 @media (max-width: 900px) {
   .commands-layout,
   .command-detail-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .filters,
   .command-aside {
@@ -1727,9 +1792,80 @@ nav button.active {
   .command-header h1 {
     font-size: 26px;
   }
+  /* 命令名可能很长（`docker-container-ls`），窄屏必须允许断行，否则撑出横向滚动条。 */
+  .command-header h1 code {
+    overflow-wrap: anywhere;
+  }
+  .breadcrumb {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .breadcrumb span:last-child {
+    overflow-wrap: anywhere;
+  }
+  .command-detail-layout {
+    gap: 14px;
+  }
+  /*
+   * 选项表在窄屏改成「一张卡 = 一个选项」。原来的两列表格在 390px 下只剩 332px 可用宽度，
+   * flag 列（桌面端固定 210px）会把说明挤成一列单字，完全读不了。
+   */
+  .option-table,
+  .option-table tbody,
+  .option-table tr,
+  .option-table td {
+    display: block;
+    width: 100%;
+  }
+  .option-table tr {
+    margin-bottom: 8px;
+    padding: 9px 11px;
+    border: 1px solid #22323a;
+    border-radius: 8px;
+  }
+  /* 斑马纹挪到卡片本身，别再画在 td 上（td 现在没有边框了）。 */
+  .option-table tr:nth-child(even) {
+    background: #0d1519;
+  }
+  .option-table tr:nth-child(even) td {
+    background: transparent;
+  }
+  .option-table td {
+    border: 0;
+    padding: 0;
+    /* 选项说明里可能有 `--force-all` 这类长 token，窄屏允许在任意位置断行。 */
+    overflow-wrap: anywhere;
+  }
+  .option-table td + td {
+    margin-top: 3px;
+    font-size: 12.5px;
+  }
   .option-flag {
     width: auto;
     white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  /* 原文里的 Markdown 表格同样可能超宽，改成可横向滚动的块，而不是把整页撑宽。 */
+  .markdown-body table {
+    display: block;
+    overflow-x: auto;
+  }
+  .syntax-block,
+  .example-code,
+  .markdown-body pre {
+    padding: 11px 12px;
+    font-size: 12px;
+  }
+  .command-section + .command-section {
+    margin-top: 24px;
+    padding-top: 20px;
+  }
+  .raw-fallback-hint {
+    padding: 9px 11px;
+    font-size: 12px;
+  }
+  .aside-link small {
+    overflow-wrap: anywhere;
   }
 }
 
@@ -1738,7 +1874,7 @@ nav button.active {
     align-items: flex-start;
   }
   .unit-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .zone-block {
     padding: 19px 16px;
@@ -2015,6 +2151,159 @@ nav button.active {
   transform: translateY(14px);
 }
 
+/* ---------------------------------------------------------------------------
+   交互动效
+   --------------------------------------------------------------------------- */
+
+/*
+ * 页面切换（App.vue 的 <Transition name="page">）。
+ * `mode="out-in"`：旧页面先退场，两段合计约 0.33s —— 足够表达「换页了」，
+ * 又不至于让人等；入场比退场慢一点，视线落在新内容上时它是「落定」而不是「闪出」。
+ */
+.page-enter-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+.page-leave-active {
+  transition:
+    opacity 0.13s ease,
+    transform 0.13s ease;
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* 登录/注册弹窗：遮罩淡入，面板上浮 + 轻微放大（回弹曲线收尾）。 */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.2s ease;
+}
+.modal-enter-active .auth-modal,
+.modal-leave-active .auth-modal {
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+.modal-enter-from .auth-modal,
+.modal-leave-to .auth-modal {
+  opacity: 0;
+  transform: translateY(14px) scale(0.96);
+}
+
+/*
+ * 可点击卡片的悬停反馈。`.locked` 的单元与关卡点不动，必须排除 ——
+ * 否则鼠标移上去有抬升手感、点下去却没反应，比不加动效更让人困惑。
+ */
+.command-card,
+.unit-card,
+.quest-item,
+.aside-link,
+.filter-chip {
+  transition:
+    transform 0.16s ease,
+    border-color 0.16s ease,
+    background-color 0.16s ease;
+}
+.command-card:hover,
+.unit-card:not(.locked):hover,
+.quest-item:not(.locked):hover {
+  transform: translateY(-2px);
+}
+.filter-chip:hover {
+  transform: translateY(-1px);
+}
+
+/* 按钮按下反馈。`.primary` / `.secondary` 原本没有 :active 样式，点下去毫无手感。 */
+.primary,
+.secondary,
+.text-button {
+  transition:
+    transform 0.1s ease,
+    filter 0.16s ease,
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+.primary:not(:disabled):active,
+.secondary:not(:disabled):active {
+  transform: translateY(1px);
+  filter: brightness(0.94);
+}
+
+/*
+ * 键盘可见焦点。输入框自己已有 `:focus` 描边（见 `.auth-modal input:focus`），
+ * 这里只补链接/按钮 —— 它们此前完全看不出焦点在哪。
+ * 不要在这里写 border-radius：它会把 `.primary` 等元素自己的圆角覆盖掉。
+ */
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #70e09b;
+  outline-offset: 2px;
+}
+
+/* 进度条：宽度变化补一个过渡，否则进度是「跳」出来的，看不出增长。 */
+.meter span,
+.badge-progress span {
+  transition: width 0.5s cubic-bezier(0.3, 0.9, 0.3, 1);
+}
+
+/*
+ * 作答判定反馈：答对轻微放大、答错横向抖一下。
+ * 刻意不只用颜色区分对错 —— 色觉障碍用户也要能感知判定结果。
+ */
+@keyframes option-correct {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.015);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes option-wrong {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
+}
+.option-item.correct {
+  animation: option-correct 0.28s ease;
+}
+.option-item.wrong {
+  animation: option-wrong 0.26s ease;
+}
+
+/* 尊重系统「减少动态效果」：把动画压到近乎瞬时，但保留状态变化本身。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @media (max-width: 900px) {
   .achievement-score {
     text-align: left;
@@ -2040,7 +2329,7 @@ nav button.active {
     padding: 17px 15px;
   }
   .badge-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   /* 表格在窄屏横向滚动，而不是把列压到读不出来 */
   .leaderboard-page {

@@ -109,9 +109,8 @@ docker compose up -d --build
 **已在真机实测通过**（x86_64 / 2 核 / 1.8GB 内存）：构建 87 秒，4 个容器 25 秒内全部 healthy，
 MySQL 落库 13 张表 / 21 单元 / 63 题 / 614 条命令。
 
-> ⚠️ 当前 `docker-compose.yml` 把 MySQL(3306) 与 Redis(6379) 映射到了 `0.0.0.0`，
-> 在公网服务器上等于对外开放（实测 Redis 无认证）。**公网部署前请改成只绑 `127.0.0.1`**，
-> 详见 `AGENTS.md` §7。
+> ✅ MySQL(3306) 与 Redis(6379) 只绑 `127.0.0.1`，不对公网暴露（应用走 Docker 内网 DNS）。
+> 公网实测：3306 / 6379 均 `Connection refused`，`:8080` 正常。背景见 `AGENTS.md` §7。
 
 ## 文档
 

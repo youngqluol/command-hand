@@ -167,12 +167,12 @@ pnpm run format:check  # Prettier 检查格式，不写入
 
 ```bash
 cp .env.example .env          # 首次：补 CORS_ORIGINS 为服务器地址
-docker compose up -d --build  # 前端 :8080，后端 :8000，MySQL :3306，Redis :6379
+docker compose up -d --build  # 前端 :8080，后端 :8000，MySQL/Redis 只绑 127.0.0.1
 docker compose ps             # 4 个服务都应为 running/healthy
 ```
 
 **已在真机实测通过**（2 核 / 1.8GB 内存 / x86_64，构建 87 秒）。部署检查清单、运维坑
-与待处理的端口暴露问题见 §7。
+与端口暴露的处理见 §7。
 
 ---
 
@@ -659,6 +659,66 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '') ||
 **判断方法**：`grep -rn "className" src/` 之外，最可靠的是在浏览器里查 `getComputedStyle`
 看 `display` 是不是你写的那条。
 
+**布局：栅格轨道一律写 `minmax(0, 1fr)`，不要写裸 `1fr`**
+
+裸 `1fr` 的轨道最小值是 `auto`（即 `min-width: auto`），会被轨道内的**不可断行内容**顶宽 ——
+`overflow-x: auto` 的代码块也拦不住，因为它只让自身可滚动，不改变它对父级 `min-content` 的贡献。
+已踩过：命令详情页在 390px 下整页被撑到 **886px**，出现横向滚动条，元凶是 15 个 `.example-code`
+里的长命令行；`<pre>` 自身的 `overflow-x: auto` 完全没起作用。
+
+```css
+/* ✅ */  grid-template-columns: 235px minmax(0, 1fr);
+/* ❌ */  grid-template-columns: 235px 1fr;
+```
+
+**验证方法**：窄屏（390px）下必须满足 `document.documentElement.scrollWidth <= clientWidth`。
+逐元素找元凶可以用「批量 `display: none` 再量 `scrollWidth`」的办法二分定位。
+
+⚠️ **`window.innerWidth` 在 Playwright 的 `isMobile: true` 模拟下不可信**（实测 390px 视口报 886）。
+判横向溢出请一律用 `document.documentElement.clientWidth`，否则断言会假通过。
+
+**吸顶顶栏：两层结构 + `--topbar-height`**
+
+`.topbar` 是 `position: sticky` 的**通栏外层**，只负责铺毛玻璃底与分隔线；`.topbar-inner` 负责
+与正文同宽居中。如果只做一层，吸顶背景就只有 1180px 宽，滚动时两侧会漏出内容。
+
+- 顶栏在 `App.vue` 里位于 `.app-shell` **之外**（`TopBar.vue` 的 `<header>` 是 `body` 的直接子元素），
+  这样才能通栏。正文限宽靠 `.app-shell` / `.topbar-inner` 共用的 `--shell-width`。
+- `z-index: 8`，**必须低于** `.modal-backdrop`(10) 与 `.unlock-toast`(60)，否则弹窗会被顶栏压住。
+- 未滚动时刻意不加底色（与首屏连成一片），`window.scrollY > 4` 时由 `TopBar.vue` 挂 `.is-stuck`。
+- **顶栏高度变化必须同步 `--topbar-height`**（`:root` 里定义）：`.filters`（命令速查筛选栏）与
+  `.command-aside`（命令详情侧栏）的 sticky 偏移是 `calc(var(--topbar-height) + 18px)`，
+  写死数字会让它们滑到顶栏底下被盖住。
+
+**动效约定**
+
+| 位置 | 做法 | 时长 |
+| --- | --- | --- |
+| 页面切换 | `App.vue` 的 `<Transition name="page" mode="out-in">` | 退 0.13s / 进 0.2s |
+| 登录注册弹窗 | `<Transition name="modal">`，遮罩淡入 + 面板上浮缩放 | 0.2s / 0.22s |
+| 成就解锁提示 | 既有 `.unlock-*` | 0.25s |
+| 卡片悬停 | `.command-card` / `.unit-card` / `.quest-item` 上浮 2px | 0.16s |
+| 作答判定 | `.option-item.correct/wrong` 缩放/抖动 | 0.26–0.28s |
+
+- **`mode="out-in"` 与滚动位置是绑定的**：`router/index.ts` 的 `scrollBehavior` 返回 `false`
+  （不自动滚动），滚动归零改在 `App.vue` 的 `@before-enter` 里做。原因：`scrollBehavior` 在导航
+  确认瞬间就执行，而此刻旧页面还在退场，用户会看到「旧页面先跳到顶部再淡出」的闪烁（已实测到：
+  旧页面 `y=1400` 时退场帧里 `scrollY` 已经变成 0）。放在进场前，屏幕上正好没有内容，跳转不可见。
+- **页面过渡的 `:key` 用 `route.path` 而不是组件**。否则 `/commands/ls` → `/commands/grep` 复用同一
+  个组件实例，不会有任何过渡。
+- **动画一律要覆盖 `prefers-reduced-motion: reduce`**（`styles.css` 末尾统一压到 0.01ms）。
+- **不要给 `.locked` 的卡片加悬停动效**：点不动却有抬升手感，比不加动效更让人困惑。
+
+**表单行内校验**
+
+- 提示文案**常驻占位**，通过时显示填写要求、失败时被红字顶掉。用 `v-if` 才渲染会把提交按钮上下
+  顶动 —— 用户正好在点「登录」的瞬间按钮跑掉就会误点。已验证：报错前后按钮 `top` 不变。
+- 前端规则必须与后端 `schemas.RegisterRequest` 的 `Field` 约束一致（用户名 `3–32` 位
+  `^[a-zA-Z0-9_-]+$`，密码 `8–128` 位）。前端只是提前拦截，权威校验仍在服务端。
+- 表单加 `novalidate`，去掉 `required` / `minlength`：浏览器原生气泡提示样式不可控、也没法做成行内文案。
+- **服务端错误要落到对应字段**：409 → 用户名，401 → 密码，网络/5xx → 表单级。落字段后同样要
+  `focus()`，否则用户只看到红字却不知道光标该去哪。
+
 ### 5.6 代码质量与格式（ESLint + Prettier）
 
 **前端必须集成 ESLint。** 这是硬性要求，不是可选项（见 §0.3）。**当前已接入**，配置如下。
@@ -884,14 +944,19 @@ docker exec <mysql容器> sh -c "exec mysqldump -uroot -p'$RP' --single-transact
   | gzip > /root/backup-$(date +%Y%m%d-%H%M%S).sql.gz
 ```
 
-### 待处理：端口暴露（安全问题）
+### 端口暴露（安全问题，已修）
 
-`docker-compose.yml` 把 `mysql`(3306) 与 `redis`(6379) 映射成 `0.0.0.0:...`，
+`docker-compose.yml` 曾把 `mysql`(3306) 与 `redis`(6379) 映射成 `0.0.0.0:...`，
 **云主机上等于对公网开放**。实测 Redis **完全无认证**（匿名 `INFO server` 直接返回数据），
 MySQL 也只需弱口令 —— 开放 Redis 是常见的挖矿/勒索入口。
 后端通过 Docker 内网 DNS（`mysql:3306` / `redis:6379`）访问，**宿主机端口映射对应用并非必需**。
-建议改为只绑本地：`"127.0.0.1:3306:3306"` / `"127.0.0.1:6379:6379"`，或直接去掉 `ports`。
-**需与维护者确认是否有从宿主机外部连库的用法后再改。**
+
+**现状**：已改为只绑回环 —— `"127.0.0.1:3306:3306"` / `"127.0.0.1:6379:6379"`。
+从公网实测：3306 / 6379 均为 `Connection refused`，`:8080` 仍返回 200。
+
+⚠️ 仍需确认的一点：`backend` 服务的 `8000` 端口（若有映射）目前**仍对公网开放**。
+后端本身有 token 鉴权、且 nginx 已能反代，去掉这个映射更干净 —— 待维护者确认是否有
+「从外部直连后端做调试」的用法后再动。
 
 已补齐、从缺口表移除的条目：
 
@@ -1010,6 +1075,17 @@ feat: gitignore
 - [ ] 改了训练路径 → `TRAINING_MODES`（`main.py`）、`TrainingMode`（`schemas.py` + `types.ts`）、
   `compute_unit_statuses()` 的分支、`TrainingModeSwitch.vue` 的 `MODES` 是否五处一致？是否跑过 `smoke_test.py` 的训练路径断言？
 - [ ] 新增全局 CSS 类名 → 是否与 `styles.css` 里已有类重名？（同名会静默覆盖，移动端才暴露，见 §5.5）
+- [ ] 新增 / 修改栅格布局 → 轨道是否用了 `minmax(0, 1fr)` 而不是裸 `1fr`？（裸 `1fr` 会被代码块顶宽，
+  见 §5.5）是否在 390px 下确认 `documentElement.scrollWidth <= clientWidth`？注意别用 `window.innerWidth`
+  当参照物（`isMobile` 模拟下不可信）
+- [ ] 改了顶栏高度或结构 → `:root` 的 `--topbar-height` 是否同步？`.filters` / `.command-aside` 的
+  sticky 偏移是否还对得上？顶栏 `z-index` 是否仍低于弹窗(10)与成就提示(60)？（见 §5.5）
+- [ ] 新增动效 → 是否覆盖了 `prefers-reduced-motion: reduce`？是否避开了 `.locked` 的卡片？
+  （见 §5.5）
+- [ ] 改了页面切换过渡 → `router/index.ts` 的 `scrollBehavior` 是否仍是 `false`？滚动归零是否仍在
+  `App.vue` 的 `@before-enter`？（放回 `scrollBehavior` 会出现「旧页面先跳顶再淡出」的闪烁，见 §5.5）
+- [ ] 改了登录 / 注册表单校验 → 是否与 `schemas.RegisterRequest` 的 `Field` 约束一致？提示是否常驻
+  占位（不能顶动提交按钮）？服务端 409 / 401 是否仍落到对应字段并聚焦？（见 §5.5）
 - [ ] 改了 `models.py` 的表/列 → 目标环境是**已有数据的库**吗？`create_all` 不会改已有表，
   跨版本升级必须重建卷或手工 `ALTER`（见 §6、§7）
 - [ ] 改了 `docker-compose.yml` 的 `ports` → 公网服务器上 MySQL / Redis 是否仍绑在 `0.0.0.0`？
@@ -1065,6 +1141,7 @@ feat: gitignore
 | 前端工具链与代码质量配置 | `AGENTS.md` §5.6 + `README.md` |
 | 前端目录结构、路由、状态管理、API 封装 | `AGENTS.md` §3 + §5.0–§5.5 |
 | 前端全局样式与类名约定 | `AGENTS.md` §5.5 |
+| 栅格布局 / 横向溢出 / 吸顶顶栏 / 动效 / 表单行内校验 | `AGENTS.md` §5.5 + §10 |
 | 包管理器与锁文件策略 | `AGENTS.md` §5.7 + `README.md` |
 
 一次改动可能同时命中多行 —— **全部都要更新**。

@@ -61,7 +61,13 @@ const router = createRouter({
       meta: { title: '页面不存在' },
     },
   ],
-  scrollBehavior: () => ({ top: 0 }),
+  /*
+   * 滚动归零**不在这里**做。导航确认的那一刻旧页面还在退场（App.vue 的页面过渡是
+   * `out-in`，要 130ms），此时跳顶会让用户看到「旧页面先跳到顶部再淡出」的闪烁。
+   * 改由 App.vue 的过渡钩子在「新页面进场前」归零 —— 那一刻屏幕上没有内容，跳转不可见。
+   * 返回 false 即「不自动滚动」。
+   */
+  scrollBehavior: () => false,
 })
 
 router.afterEach((to) => {
