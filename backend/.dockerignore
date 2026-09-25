@@ -1,0 +1,25 @@
+# 构建上下文精简。Dockerfile 只 COPY `app/` 与 `data/`，
+# 但 docker 会把整个 context 打包发给 daemon —— 没有本文件时 66MB 里
+# 有 57MB 是本地 .venv、7.6MB 是本地 SQLite 库，纯属浪费带宽。
+# 远程服务器构建时这一项差别很明显。
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# 本地数据库与备份（见 .gitignore，同理不进构建上下文）
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.bak*
+
+# 开发期脚本与测试，不进镜像
+scripts
+
+# 凭据
+.env
+.env.*
+!.env.example

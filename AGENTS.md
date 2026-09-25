@@ -166,8 +166,20 @@ pnpm run format:check  # Prettier 检查格式，不写入
 ### 全栈
 
 ```bash
-docker compose up --build     # 前端 :8080，后端 :8000，MySQL :3306，Redis :6379
+cp .env.example .env          # 首次：补 CORS_ORIGINS 为服务器地址
+docker compose up -d --build  # 前端 :8080，后端 :8000，MySQL :3306，Redis :6379
+docker compose ps             # 4 个服务都应为 running/healthy
 ```
+
+⚠️ **本条路径从未实测过**（开发全程用 SQLite + Vite，开发机未装 Docker，见 §7）。
+首次在真机上跑时重点看这几处 —— 都是「换数据库引擎 / 换构建环境」才可能暴露的问题：
+
+| 关注点 | 期望 |
+| --- | --- |
+| MySQL 建表 | `users.training_mode` 等 13 张表全部建出；`String` 列都有长度，不应报 `VARCHAR requires a length` |
+| 课程与命令落库 | 启动日志出现「命令手册现有 614 条记录」 |
+| 健康检查 | `curl 127.0.0.1:8000/health` → `{"status":"ok",...}`；这是 `depends_on: service_healthy` 的依据 |
+| 同源反代 | 浏览器只访问 `:8080`，nginx 把 `/api/` 转到 `backend:8000`，因此**不产生跨域预检** |
 
 ---
 
@@ -203,6 +215,8 @@ backend/
     commands_seed.json.gz  # 命令手册离线快照，**必须提交**（见 §4.8）
   requirements.txt
   requirements-dev.txt
+  Dockerfile       # python:3.13-slim + pip 阿里云镜像；只 COPY app/ 与 data/
+  .dockerignore    # 排除 .venv / *.db / scripts（否则构建上下文 66MB，其中 57MB 是本地虚拟环境）
   shellquest.db    # 本地 SQLite（gitignore，勿提交）
 
 frontend/
