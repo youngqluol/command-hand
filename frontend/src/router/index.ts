@@ -36,6 +36,13 @@ const router = createRouter({
       meta: { title: '命令速查' },
     },
     {
+      path: '/commands/:name',
+      name: 'command-detail',
+      component: () => import('../views/CommandDetailView.vue'),
+      props: true,
+      meta: { title: '命令详情' },
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'not-found',
       component: () => import('../views/NotFoundView.vue'),

@@ -60,6 +60,12 @@ uvicorn app.main:app --reload --port 8000
 .venv/Scripts/python scripts/smoke_test.py   # 课程 / 认证 / 判题 / 解锁 / 命令手册 / 检索 / 打卡 / 技能树
 ```
 
+命令手册验收核查（在已导入的真实库上只读运行，对应 `REQUIREMENTS.md` 4.4.11）：
+
+```bash
+.venv/Scripts/python scripts/verify_commands.py   # 内容无损 614/614 / 精确命中置顶 / 分面 / 许可 / 关联
+```
+
 > 若数据库是旧版本（表结构不同），首次启动会因表结构不匹配而报错，
 > 需要先删除 `backend/shellquest.db` 再启动。详见 `AGENTS.md` §6。
 

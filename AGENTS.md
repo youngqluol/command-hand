@@ -107,6 +107,16 @@ uvicorn app.main:app --reload --port 8000
 关键词检索 → 自然语言检索 → 兜底建议 → 打卡 → 技能树。改完后端接口或检索逻辑后跑一遍，
 比逐个 curl 快。断言里的 `21 / 63 / 614` 是当前数据快照的规模，课程或上游版本变化时要同步改。
 
+**命令手册验收核查**（在**已导入的真实库**上只读运行，对应 REQUIREMENTS.md 4.4.11）：
+
+```bash
+.venv/Scripts/python scripts/verify_commands.py
+```
+
+覆盖：614 条 `body_markdown` 与种子快照逐字节比对（内容无损）→ 结构化提取覆盖率 →
+抽 20 条命令验证「精确命中置顶」与「详情非空」→ 分面数据完整 → 来源许可 → `related_quests`。
+与 `smoke_test.py` 的分工：冒烟测「链路通不通」，本脚本测「数据对不对」。
+
 ### 命令手册导入（工作目录 `backend/`）
 
 命令手册数据来自上游 `jaywcjlove/linux-command`（MIT），**手动触发、不自动同步**（见 §4.8）。
@@ -184,6 +194,7 @@ backend/
     import_commands.py     # 命令手册导入（下载 / 解析 / 幂等写库 / 导出快照）
     command_taxonomy.json  # 命令分类与标签映射表（自建，见 §4.8）
     smoke_test.py          # 端到端冒烟测试（临时库，见 §2）
+    verify_commands.py     # 命令手册验收核查（真实库只读，见 §2）
   data/
     commands_seed.json.gz  # 命令手册离线快照，**必须提交**（见 §4.8）
   requirements.txt
@@ -205,18 +216,22 @@ frontend/
       ui.ts        # 登录弹窗开合
     utils/
       text.ts      # 课程文案的行内 Markdown 解析（不生成 HTML）
+      markdown.ts  # markdown-it + DOMPurify：块级 Markdown → 安全 HTML
     components/
       TopBar.vue          # 顶栏导航 + 账号
       AuthModal.vue       # 登录 / 注册弹窗
       ProgressCard.vue    # 等级、经验条、连续打卡
       SkillTreePanel.vue  # 按区域切换的技能树
       QuestionPane.vue    # 4 种题型的作答区 + 判题反馈
-      InlineText.vue      # 渲染含行内代码/粗体的文案
+      InlineText.vue      # 渲染含行内代码/粗体的文案（不走 v-html）
+      MarkdownBlock.vue   # 渲染块级 Markdown（唯一允许 v-html 的地方）
+      CommandCard.vue     # 命令列表项（浏览态与搜索态共用）
     views/
       HomeView.vue        # 训练营首页
       UnitsView.vue       # 课程地图（6 区域 × 21 单元）
       UnitView.vue        # 单元内逐题作答
-      CommandsView.vue    # 命令速查（页面待实现，见 §7）
+      CommandsView.vue    # 命令速查：浏览 / 筛选 / 搜索 / 分页
+      CommandDetailView.vue # 命令详情：章节 / 选项 / 实例 / 关联任务
       NotFoundView.vue    # 404
     styles.css     # 全局样式（深色终端风）
   index.html
@@ -705,10 +720,7 @@ MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB�
 
 | 需求 | 现状 |
 | --- | --- |
-| 4.4 命令查询的前端页面 | 后端已完整（导入脚本 + 614 条数据 + 列表/分面/详情/搜索接口）。前端仅有 `CommandsView.vue` 占位页（展示数据规模），**A–Z 索引 / 分类浏览 / 标签筛选 / 搜索 / 详情页均未实现** |
 | 4.3 成就 / 徽章 / 公开排行榜 | 前后端均无实现 |
-| 4.4.8 命令 → 任务的前端跳转入口 | 后端数据已就绪（详情接口返回 `related_quests`），前端无入口 |
-| 4.4.7 搜索交互（`/` 聚焦、`↑↓` 切换、即时联想） | 未实现 |
 
 已补齐、从本表移除的条目：
 
@@ -718,6 +730,12 @@ MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB�
 - ~~4.1 自由闯关主题地图~~ —— `UnitsView.vue` 按区域分组展示 21 个单元与解锁状态
 - ~~4.4 命令速查的后端能力~~ —— 导入脚本、614 条数据、列表 / 分面 / 详情 / 关键词 / 自然语言检索接口均已实现
 - ~~4.4.8 命令 ↔ 任务关联的数据~~ —— 由 `quest_commands` 承载，与自然语言词表同源
+- ~~4.4 命令查询的前端页面~~ —— `CommandsView.vue` 已实现 A–Z 索引 / 分类 / 标签筛选 / 分页，
+  `CommandDetailView.vue` 已实现章节 / 选项表 / 实例 / 原文折叠 / 关联卡片；筛选条件全部写进 URL query
+- ~~4.4.8 命令 ↔ 任务的双向跳转入口~~ —— 答题正确后 `QuestionPane.vue` 展示「涉及命令」跳详情；
+  详情页「课程关联」卡片反向跳回单元（`/commands/ls` → `/units/2` 已浏览器验证）
+- ~~4.4.7 搜索交互（`/` 聚焦、`↑↓` 切换、`Esc` 清空、即时联想）~~ —— 已在 `CommandsView.vue` 落地；
+  关键词与自然语言两种模式，无命中时展示 `suggestions` 兜底建议
 
 其他待改进项：
 
@@ -731,8 +749,12 @@ MySQL 下 `commands.search_text` 与 `body_markdown` 是 `Text`（上限 64 KB�
   但更彻底的做法是改 13 道 `fill` 题的题干措辞
 - `choice` / `judge` 题型目前**全部为单选**（27 道题的 `correct_keys` 长度均为 1），
   因此前端用单选交互。若以后出现多选题，`QuestionPane.vue` 的 `pick()` 需要改成多选
-- 上游有 38 条命令未提取出结构化选项、158 条未提取出示例（多为原文本身就没有该章节），
-  详情页需保证渲染原文的降级路径可用
+- 上游有 38 条命令未提取出结构化选项、158 条未提取出示例（多为原文本身就没有该章节）。
+  **但只有 1 条（`curl`）连 `sections` 都为空** —— 即真正需要走原文回落的只有它一条，
+  详情页已有「上游原文」折叠块兜底
+- **`curl.md` 的 Markdown 围栏不成对**，导致 `split_document()` 整体切分失败、`sections` 为空
+  （614 条里仅此 1 条）。`CommandDetailView.vue` 用 `needsRawFallback` 判断「无章节 + 无结构化选项/实例
+  + 无语法」时直接渲染 `body_markdown`，否则详情页除标题外一片空白。**改章节切分逻辑时要回归这一条**
 - `容器基地` 分类只有 `docker` 一条 —— 上游 614 条命令里确实没有其他容器工具（无 podman / kubectl / helm）
 - 课程没有覆盖「压缩归档」主题，因此 34 条压缩类命令在自然语言检索里找不到对应关卡
 
@@ -795,6 +817,9 @@ feat: gitignore
 - [ ] 新增命令分类值 → 是否加进了 `command_taxonomy.json` 的 `categories` 数组？`main.py` 的 `COMMAND_CATEGORY_ORDER` 是否同步？
 - [ ] 前端改动 → `pnpm run build` 是否通过（含 `vue-tsc` 类型检查）？`pnpm run lint` 是否零错误？（见 §0.3）
 - [ ] 新增前端页面 → 是否在 `router/index.ts` 注册并给了 `meta.title`？是否按 `views/` + `components/` 拆分？（见 §5.0）
+- [ ] 命令速查的筛选条件 → 是否写进了 URL query（`?q=&mode=&category=&tag=&letter=&page=`）而不是只放组件内 `ref`？URL 是筛选状态的唯一来源，否则刷新 / 分享 / 后退都会丢状态
+- [ ] 改了命令章节切分或详情渲染 → 是否回归了 `curl`（围栏不成对，`sections` 为空）走原文兜底？（见 §7）
+- [ ] 题目答案相关 → 前端是否**只在提交后**才展示答案与「涉及命令」？（提交前展示等于泄题，见 §11）
 - [ ] 改了后端字段 → 是否同步了 `src/types.ts`？（见 §5.2）
 - [ ] 本次改动涉及的文件，是否都已按 §12.1 同步更新了对应文档？（见 §0.1）
 - [ ] `AGENTS.md` 是否已按 §0.2 同步？若有缺口被补齐，§7 的条目是否已删除？
@@ -814,6 +839,8 @@ feat: gitignore
 - ❌ 不要引入 Pinia / Vuex。跨视图共享的状态放 `src/stores/` 的模块级 `ref`（见 §5.3）
 - ❌ 不要在各组件里手写 `fetch` —— 统一走 `src/api/client.ts` 的 `request()`（见 §5.1）
 - ❌ 不要用 `v-html` 渲染课程文案 —— 用 `<InlineText>`（见 §5.5）
+- ❌ 不要在题目**提交前**渲染 `expected_display`、`explanation` 或「涉及命令」标签 ——
+  命令名就是 `terminal` 题的答案，提交前露出等于泄题（见 §10）
 - ❌ 不要把 Redis 当作已接入的能力来使用，除非你真的完成了接入
 - ❌ 不要用 npm / yarn / bun 安装前端依赖，也不要提交非 pnpm 锁文件（见 §0.4、§5.7）
 - ❌ 不要在课程列表 / 题目详情接口中下发答案字段（`answer_display` / `judge_payload` / 选项的 `is_correct`）。

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import { isNetworkError, request } from '../api/client'
 import { applySubmitResult, isLoggedIn } from '../stores/session'
@@ -190,6 +191,18 @@ function retry(): void {
       <span v-if="result.safer_alt" class="feedback-extra">
         🛡 更稳的做法：<InlineText :text="result.safer_alt" />
       </span>
+      <!-- 命令名对 terminal 题来说就是答案，所以只在答对后才给出跳转入口（REQUIREMENTS.md §4.4.8） -->
+      <div v-if="result.correct && quest.commands.length" class="quest-commands">
+        <span class="muted">涉及命令：</span>
+        <RouterLink
+          v-for="item in quest.commands"
+          :key="item"
+          class="filter-chip"
+          :to="{ name: 'command-detail', params: { name: item } }"
+        >
+          {{ item }}
+        </RouterLink>
+      </div>
       <button v-if="!result.correct" class="secondary compact" @click="retry">再试一次</button>
     </div>
   </article>
